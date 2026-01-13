@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
 import time
+import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
@@ -43,57 +44,57 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # 1. Validate Basic Columns
+    # 1. Validate Columns
     required_cols = ['Ticker', 'Shares', 'Purchase Price']
     for col in required_cols:
         if col not in df.columns:
             st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
             st.stop()
-    
-    # 2. Validate/Create "Memory" Columns (Matches your screenshot)
-    # Mapping: Code Name -> Your Sheet Header Name
+            
+    # 2. Map Sheet Headers to Internal Names
+    # This allows us to find your specific columns even if they have weird names
     col_map = {
-        'Market Cap': 'Market Cap',
-        'Analyst Target': 'Analyst Target',
-        'P/E Ratio': 'P/E',          # <--- Adjusted to match your "P/E" column
-        '52W High': '52W High',
-        '52W Low': '52W Low',
+        'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), None),
+        'Analyst Target': next((c for c in df.columns if 'Target' in c), None),
+        'P/E': next((c for c in df.columns if 'P/E' in c), None),
+        'Div Yield': next((c for c in df.columns if 'Div' in c and 'Yield' in c), None),
+        '52W High': next((c for c in df.columns if '52' in c and 'High' in c), None),
+        '52W Low': next((c for c in df.columns if '52' in c and 'Low' in c), None),
         'Sector': 'Sector'
     }
 
-    # Ensure these exist in the DataFrame (even if empty) so code doesn't break
-    for internal_name, sheet_header in col_map.items():
-        if sheet_header not in df.columns:
-            # If your sheet is missing "Analyst Target", we create a placeholder in memory
-            df[sheet_header] = "" 
-
     portfolio = df.copy()
     portfolio = portfolio[portfolio['Ticker'] != '']
-    
-    # --- ROBUST CLEANING FUNCTIONS ---
-    def clean_currency(x):
-        if isinstance(x, str):
-            return x.replace('$', '').replace(',', '').strip()
-        return x
 
-    def clean_financial_text(x):
-        """Cleans values like '$7,754 M' or '38 x' into pure numbers"""
-        if isinstance(x, (int, float)): return x
-        if not isinstance(x, str): return float('nan')
-        # Remove M (millions), B (billions), x (times), $ (currency), , (commas)
-        s = x.upper().replace(',', '').replace('$', '').replace('M', '').replace('B', '').replace('X', '').strip()
-        if s == '' or s == '-': return float('nan')
+    # --- ROBUST CLEANING FUNCTIONS (The "Fixer") ---
+    def clean_number(x):
+        """Converts strings like '38 x', '2.5%', '$7,754 M' into pure floats"""
+        if pd.isna(x) or x == '' or x == '-': return float('nan')
+        if isinstance(x, (int, float)): return float(x)
+        
+        # Make string clean
+        s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
+        
+        # Handle "Million/Billion" visual formatting
+        multiplier = 1
+        if 'M' in s: 
+            multiplier = 1_000_000
+            s = s.replace('M', '')
+        elif 'B' in s: 
+            multiplier = 1_000_000_000
+            s = s.replace('B', '')
+            
+        # Remove suffixes like 'x' or '%'
+        s = s.replace('X', '').replace('%', '')
+        
         try:
-            val = float(s)
-            # Heuristic: If value is small (e.g. 7754) but header is Market Cap, 
-            # it probably meant Millions. However, for safety, we treat as raw first.
-            # Yahoo will overwrite this with the full number (7754000000) soon anyway.
-            return val
+            return float(s) * multiplier
         except:
             return float('nan')
 
-    portfolio['Shares'] = pd.to_numeric(portfolio['Shares'].apply(clean_currency), errors='coerce')
-    portfolio['Purchase Price'] = pd.to_numeric(portfolio['Purchase Price'].apply(clean_currency), errors='coerce')
+    # Apply cleaning to Shares/Price immediately
+    portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
+    portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
 
     def fix_ticker(ticker):
@@ -108,6 +109,7 @@ try:
 
     st.sidebar.success("✅ Sync Successful!")
     
+    # History Chart
     try:
         hist_data = history_sheet.get_all_values()
         if len(hist_data) > 1:
@@ -120,7 +122,6 @@ try:
 
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
-    st.info("If deploying to Cloud, ensure you added your secrets in Advanced Settings.")
     st.stop()
 
 # --- MAIN DASHBOARD ---
@@ -131,7 +132,6 @@ if st.button("Run Full Analysis", type="primary"):
     # --- STEP 1: BENCHMARK ---
     market_return_pct = 0.0
     market_hist_data = None
-    
     with st.spinner('Fetching Benchmark...'):
         try:
             market_data = yf.download(BENCHMARK_TICKER, period="1y", progress=False)
@@ -144,7 +144,7 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: BULK PRICE HISTORY ---
+    # --- STEP 2: BULK PRICE HISTORY (Fast & Reliable) ---
     with st.spinner('Fetching prices...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -161,7 +161,6 @@ if st.button("Run Full Analysis", type="primary"):
                 try:
                     if len(ticker_list) == 1: df_t = bulk_data
                     else: df_t = bulk_data[t]
-                    
                     df_t = df_t.dropna(how='all')
                     
                     if not df_t.empty and 'Close' in df_t.columns:
@@ -198,84 +197,86 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (SMART PERSISTENCE) ---
+    # --- STEP 3: FUNDAMENTALS (READ SHEET -> FETCH MISSING -> WRITE BACK) ---
     progress = st.progress(0); status = st.empty()
     
     final_pe, final_div, final_mcap, final_upside = [], [], [], []
     final_52_lo, final_52_hi = [], []
-    
-    # Identify Header Names from Map
-    h_mcap = col_map['Market Cap']
-    h_target = col_map['Analyst Target']
-    h_pe = col_map['P/E Ratio']
-    h_52h = col_map['52W High']
-    h_52l = col_map['52W Low']
 
     for i, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
         status.text(f"Analyzing {t}...")
         progress.progress((i+1)/len(portfolio))
         
-        # 1. READ EXISTING DATA (Clean it first)
-        curr_mcap = clean_financial_text(row.get(h_mcap))
-        curr_target = clean_financial_text(row.get(h_target))
-        curr_pe = clean_financial_text(row.get(h_pe))
-        curr_52h = clean_financial_text(row.get(h_52h))
-        curr_52l = clean_financial_text(row.get(h_52l))
-        curr_div_pct = 0.0
+        # 1. READ FROM SHEET & CLEAN (Fallback)
+        curr_mcap = clean_number(row.get(col_map['Market Cap']))
+        curr_target = clean_number(row.get(col_map['Analyst Target']))
+        curr_pe = clean_number(row.get(col_map['P/E']))
+        curr_div_pct = clean_number(row.get(col_map['Div Yield']))
+        curr_52h = clean_number(row.get(col_map['52W High']))
+        curr_52l = clean_number(row.get(col_map['52W Low']))
+        
+        # If Div Yield from sheet is tiny (e.g. 0.05), it might be decimal 0.05 = 5%. 
+        # But if it's 2.51, it's percent. We standardize to "Percent whole number" (e.g. 5.0) for logic.
+        # Actually, let's trust clean_number handles the % sign removal.
 
-        # 2. FETCH NEW DATA
-        fetched_data = False
+        # 2. FETCH ONLY IF MISSING (To save API limit)
+        # We define "Missing" as NaN or 0 (except Div Yield can be 0)
+        needs_update = False
+        
         try:
             stock = yf.Ticker(t)
             
-            # A. Fast Info
-            try:
-                if hasattr(stock, 'fast_info'):
-                    if stock.fast_info.market_cap: 
-                        curr_mcap = stock.fast_info.market_cap; fetched_data = True
-                    if stock.fast_info.year_high: 
-                        curr_52h = stock.fast_info.year_high; fetched_data = True
-                    if stock.fast_info.year_low: 
-                        curr_52l = stock.fast_info.year_low; fetched_data = True
-            except: pass
+            # A. Fast Info (Market Cap, 52W) - Very reliable
+            if pd.isna(curr_mcap) or pd.isna(curr_52h):
+                try:
+                    if hasattr(stock, 'fast_info'):
+                        if pd.isna(curr_mcap) and stock.fast_info.market_cap: 
+                            curr_mcap = stock.fast_info.market_cap; needs_update = True
+                        if pd.isna(curr_52h) and stock.fast_info.year_high: 
+                            curr_52h = stock.fast_info.year_high; needs_update = True
+                        if pd.isna(curr_52l) and stock.fast_info.year_low: 
+                            curr_52l = stock.fast_info.year_low; needs_update = True
+                except: pass
 
-            # B. Deep Info
-            try:
-                info = stock.info
-                if info.get('trailingPE'): 
-                    curr_pe = info['trailingPE']; fetched_data = True
-                if info.get('targetMeanPrice'): 
-                    curr_target = info['targetMeanPrice']; fetched_data = True
+            # B. Deep Info (P/E, Target, Div) - Only if really needed
+            if pd.isna(curr_pe) or pd.isna(curr_target):
+                try:
+                    info = stock.info
+                    
+                    # P/E
+                    if pd.isna(curr_pe) and info.get('trailingPE'): 
+                        curr_pe = info['trailingPE']; needs_update = True
+                    
+                    # Target
+                    if pd.isna(curr_target) and info.get('targetMeanPrice'): 
+                        curr_target = info['targetMeanPrice']; needs_update = True
+                    
+                    # Dividend (Only update if missing)
+                    if pd.isna(curr_div_pct):
+                        d = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
+                        if d: 
+                            curr_div_pct = d * 100; needs_update = True
+                except: pass
                 
-                div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
-                if div: curr_div_pct = div * 100
-            except: pass
-            
-            time.sleep(0.1)
+                # Polite delay only if we did a deep fetch
+                time.sleep(0.1)
+                
         except: pass
 
-        # 3. SAVE TO SHEET (Update row by row if we found fresh data)
-        # Note: We use i+2 because Row 1 is headers
-        if fetched_data:
+        # 3. SAVE NEW DATA TO SHEET (The "Healing" Step)
+        if needs_update:
             try:
-                # Update Market Cap
-                if not pd.isna(curr_mcap) and h_mcap in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(h_mcap)+1, curr_mcap)
-                # Update Target
-                if not pd.isna(curr_target) and h_target in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(h_target)+1, curr_target)
-                # Update P/E
-                if not pd.isna(curr_pe) and h_pe in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(h_pe)+1, curr_pe)
-                # Update 52W
-                if not pd.isna(curr_52h) and h_52h in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(h_52h)+1, curr_52h)
-                if not pd.isna(curr_52l) and h_52l in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(h_52l)+1, curr_52l)
+                # We update specific cells. Note: i+2 is the Row (1 for header, 0-index)
+                if not pd.isna(curr_mcap) and col_map['Market Cap']:
+                    sheet.update_cell(i+2, df.columns.get_loc(col_map['Market Cap'])+1, curr_mcap)
+                if not pd.isna(curr_target) and col_map['Analyst Target']:
+                    sheet.update_cell(i+2, df.columns.get_loc(col_map['Analyst Target'])+1, curr_target)
+                if not pd.isna(curr_pe) and col_map['P/E']:
+                    sheet.update_cell(i+2, df.columns.get_loc(col_map['P/E'])+1, curr_pe)
             except: pass
 
-        # 4. STORE FOR DISPLAY
+        # 4. STORE
         final_pe.append(curr_pe)
         final_div.append(curr_div_pct)
         final_mcap.append(curr_mcap)
@@ -362,8 +363,14 @@ if st.button("Run Full Analysis", type="primary"):
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # Table
+        # Prepare Display DF
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
+        
+        # HEATMAP FIX: Force numeric types so heatmap works
+        cols_to_numeric = ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']
+        for c in cols_to_numeric:
+            display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
+        
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
         
         st.dataframe(
@@ -378,6 +385,8 @@ if st.button("Run Full Analysis", type="primary"):
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
+            .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
+            .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=600
