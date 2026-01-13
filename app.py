@@ -132,6 +132,7 @@ if st.button("Run Full Analysis", type="primary"):
         except: pass
 
     # --- STEP 2: BULK PRICE & VOLUME HISTORY ---
+    # Re-integrated Volume/Liquidity Logic
     with st.spinner('Fetching prices & volume...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -226,8 +227,10 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # NO TARGET SANITY CHECK (Trusting user data)
+        # ANALYST SANITY (Trust User Data)
         price_now = portfolio.loc[i, 'Current Price']
+        if not pd.isna(curr_target) and price_now > 0:
+            if curr_target > (price_now * 5): curr_target = float('nan')
 
         # 2. FETCH MISSING
         fetch_needed = False
@@ -333,6 +336,10 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Weight'] = portfolio['Market Value'] / total_value
     portfolio_beta = (portfolio['Weight'] * portfolio['Beta']).sum() if total_value > 0 else 1.0
 
+    if portfolio_beta > 1.15: risk_label = "Aggressive 🚀"; risk_msg = "Growth focus."
+    elif portfolio_beta < 0.85: risk_label = "Defensive 🛡️"; risk_msg = "Preservation focus."
+    else: risk_label = "Balanced ⚖️"; risk_msg = "Market tracking."
+
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_history = history_sheet.get_all_values()
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
@@ -340,7 +347,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("View Opportunities, Risks & Market News", expanded=True):
+    with st.expander("View Opportunities & Risks", expanded=True):
         col_insight_1, col_insight_2 = st.columns(2)
         
         with col_insight_1:
@@ -352,6 +359,7 @@ if st.button("Run Full Analysis", type="primary"):
             else: st.info("No major upside opportunities detected.")
 
             st.markdown("##### ⚠️ Valuation Risks (Target < Price)")
+            # This logic catches stocks where Target Price ($9.55) < Current Price ($10.70)
             risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
             if not risks.empty:
                 for _, row in risks.iterrows():
@@ -369,16 +377,6 @@ if st.button("Run Full Analysis", type="primary"):
             low_liq = portfolio[portfolio['Daily Liquidity'] < 50000]
             if not low_liq.empty:
                 st.caption(f"⚠️ Low Liquidity (<$50k/day): {', '.join(low_liq['Ticker'].tolist())}")
-        
-        # RESTORED MARKET CONTEXT
-        st.markdown("---")
-        st.markdown("##### 📰 Market Context (Jan 2026)")
-        st.info("""
-        * **Infratil (IFT):** Recent upgrade to **OUTPERFORM** (Target $14.60) by analysts, citing strong growth in the 'One NZ' division.
-        * **EBOS Group (EBO):** Maintained as **OUTPERFORM** (Target $37.25) following solid healthcare sector performance.
-        * **Spark (SPK):** Recently downgraded to **UNDERPERFORM** (Target $2.40) due to competitive headwinds.
-        * **Sector Watch:** Energy & Infrastructure stocks (like IFT) are currently driving NZX50 resilience.
-        """)
 
     st.markdown("---")
 
@@ -411,4 +409,85 @@ if st.button("Run Full Analysis", type="primary"):
         
         # HEATMAP FIX
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %', 'Vol Ratio']:
-            display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False
+            display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
+            display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
+
+        display_df = display_df.sort_values(by='Total Gain %', ascending=False)
+        
+        st.dataframe(
+            display_df.style.format({
+                "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
+                "52W Low": "${:.2f}", "52W High": "${:.2f}", "Market Cap": "${:,.0f}",
+                "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
+                "Analyst Upside": "{:+.2f}%", "Div Yield %": "{:.2f}%", "P/E Ratio": "{:.1f}",
+                "Vol Ratio": "{:.1f}x", "Daily Liquidity": "${:,.0f}"
+            }, na_rep="-")
+            .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
+            .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
+            .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-3, vmax=3)
+            .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
+            .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
+            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
+            column_config={
+                "Ticker": st.column_config.LinkColumn(
+                    "Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"
+                ),
+                "URL": None,
+                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
+                "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Daily Traded Value ($)")
+            },
+            use_container_width=True, height=600
+        )
+        
+        # PIE CHARTS
+        st.markdown("---")
+        st.subheader("📊 Portfolio Composition")
+        c_sector, c_stock = st.columns(2)
+        with c_sector:
+            st.caption("By Sector")
+            if 'Sector' in portfolio.columns:
+                sector_group = portfolio.groupby('Sector')['Market Value'].sum()
+                fig, ax = plt.subplots(figsize=(5, 5))
+                fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+                colors = plt.cm.Paired(np.linspace(0, 1, len(sector_group)))
+                ax.pie(sector_group, labels=sector_group.index, autopct='%1.0f%%', pctdistance=0.8, startangle=90, colors=colors, textprops={'color':"white"})
+                fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
+                st.pyplot(fig)
+
+        with c_stock:
+            st.caption("By Stock")
+            if 'Ticker' in portfolio.columns:
+                stock_group = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False)
+                fig2, ax2 = plt.subplots(figsize=(5, 5))
+                fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
+                colors2 = plt.cm.tab20c(np.linspace(0, 1, len(stock_group)))
+                total_val = stock_group.sum()
+                labels = [idx if (val/total_val > 0.02) else '' for idx, val in zip(stock_group.index, stock_group)]
+                ax2.pie(stock_group, labels=labels, autopct=lambda p: f'{p:.0f}%' if p > 2 else '', pctdistance=0.8, startangle=90, colors=colors2, textprops={'color':"white"})
+                fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
+                st.pyplot(fig2)
+
+        # BAR CHART
+        st.markdown("---")
+        st.subheader("🚀 Total Return by Stock")
+        perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
+        fig3, ax3 = plt.subplots(figsize=(12, 5))
+        fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
+        colors_bar = ['#00FF00' if x >= 0 else '#FF0000' for x in perf_df['Total Gain %']]
+        bars = ax3.bar(perf_df['Ticker'], perf_df['Total Gain %'], color=colors_bar)
+        ax3.set_ylabel("Total Gain %", color="white"); ax3.tick_params(colors='white')
+        ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white') 
+        ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
+        for bar in bars:
+            height = bar.get_height()
+            label_y = height if height > 0 else height - 5
+            ax3.text(bar.get_x() + bar.get_width()/2., label_y, f'{height:.0f}%', ha='center', va='bottom' if height > 0 else 'top', color='white', fontsize=9, fontweight='bold')
+        st.pyplot(fig3)
+
+    with tab2:
+        try:
+            h_df = pd.DataFrame(history_sheet.get_all_values()[1:], columns=['Date', 'Value'])
+            h_df['Date'] = pd.to_datetime(h_df['Date']); h_df['Value'] = pd.to_numeric(h_df['Value'])
+            st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
+        except: st.info("No history yet.")
