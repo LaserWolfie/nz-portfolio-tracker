@@ -94,7 +94,6 @@ try:
 
     st.sidebar.success("✅ Sync Successful!")
     
-    # History Chart
     try:
         hist_data = history_sheet.get_all_values()
         if len(hist_data) > 1:
@@ -110,7 +109,7 @@ except Exception as e:
     st.stop()
 
 # --- MAIN DASHBOARD ---
-force_fresh = st.checkbox("Force Fresh Data (Ignore Sheet)", help="Check this to force a re-download from Yahoo.")
+force_fresh = st.checkbox("Force Fresh Data (Ignore Sheet)", value=False)
 
 if st.button("Run Full Analysis", type="primary"):
     
@@ -193,7 +192,7 @@ if st.button("Run Full Analysis", type="primary"):
         status.text(f"Analysing {t}...")
         progress.progress((i+1)/len(portfolio))
         
-        # 1. READ FROM SHEET (Manual Entry Priority)
+        # 1. READ SHEET
         if force_fresh:
             curr_mcap = curr_target = curr_pe = curr_div_pct = curr_52h = curr_52l = float('nan')
         else:
@@ -204,18 +203,16 @@ if st.button("Run Full Analysis", type="primary"):
             curr_52h = clean_number(row.get(col_map['52W High']))
             curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # DIVIDEND SANITY FIX: If Yield > 30%, it's likely a scaling error (545% -> 5.45%)
-        if not pd.isna(curr_div_pct) and curr_div_pct > 30:
+        # DIVIDEND FIX: If Yield is 545% -> Convert to 5.45%
+        if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # ANALYST TARGET SANITY CHECK
+        # ANALYST SANITY: Ignore targets that are wildly wrong (e.g. Income pasted as Target)
         price_now = portfolio.loc[i, 'Current Price']
         if not pd.isna(curr_target) and price_now > 0:
-            if curr_target > (price_now * 5): 
-                # This catches the "$2,417" vs "$11" error
-                curr_target = float('nan')
+            if curr_target > (price_now * 5): curr_target = float('nan')
 
-        # 2. FETCH FROM YAHOO (Only if data is missing)
+        # 2. FETCH MISSING
         fetch_needed = False
         if pd.isna(curr_target) or pd.isna(curr_pe) or pd.isna(curr_div_pct):
             fetch_needed = True
@@ -223,51 +220,41 @@ if st.button("Run Full Analysis", type="primary"):
         if fetch_needed:
             try:
                 stock = yf.Ticker(t)
-                
-                # Fast Info
                 try:
                     if hasattr(stock, 'fast_info'):
                         if pd.isna(curr_mcap) and stock.fast_info.market_cap:
                             curr_mcap = stock.fast_info.market_cap
                             if col_map['Market Cap'] in df.columns:
                                 pending_updates.append((i+2, df.columns.get_loc(col_map['Market Cap'])+1, curr_mcap))
-                        
                         if pd.isna(curr_52h) and stock.fast_info.year_high:
                             curr_52h = stock.fast_info.year_high
                             if col_map['52W High'] in df.columns:
                                 pending_updates.append((i+2, df.columns.get_loc(col_map['52W High'])+1, curr_52h))
-                                
                         if pd.isna(curr_52l) and stock.fast_info.year_low:
                             curr_52l = stock.fast_info.year_low
                             if col_map['52W Low'] in df.columns:
                                 pending_updates.append((i+2, df.columns.get_loc(col_map['52W Low'])+1, curr_52l))
                 except: pass
 
-                # Deep Info
                 try:
                     info = stock.info
-                    
-                    # Target
                     tgt = info.get('targetMeanPrice') or info.get('targetMedianPrice')
                     if tgt and pd.isna(curr_target):
                         curr_target = tgt
                         if col_map['Analyst Target'] in df.columns:
                             pending_updates.append((i+2, df.columns.get_loc(col_map['Analyst Target'])+1, curr_target))
 
-                    # P/E
                     pe = info.get('trailingPE')
                     if pe and pd.isna(curr_pe):
                         curr_pe = pe
                         if col_map['P/E'] in df.columns:
                             pending_updates.append((i+2, df.columns.get_loc(col_map['P/E'])+1, curr_pe))
 
-                    # Dividend
                     div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
                     if div and pd.isna(curr_div_pct):
                         curr_div_pct = div * 100
                         if col_map['Div Yield'] in df.columns:
                              pending_updates.append((i+2, df.columns.get_loc(col_map['Div Yield'])+1, curr_div_pct))
-                        
                     time.sleep(0.3)
                 except: pass
             except: pass
@@ -280,7 +267,6 @@ if st.button("Run Full Analysis", type="primary"):
         final_52_lo.append(curr_52l)
         final_targets.append(curr_target)
         
-        # 4. Upside Calculation
         if not pd.isna(curr_target) and price_now > 0:
             upside_val = ((curr_target - price_now) / price_now) * 100
         else:
@@ -289,7 +275,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- BATCH SAVE ---
     if pending_updates and not force_fresh:
-        status.text(f"Saving {len(pending_updates)} new data points to Sheet...")
+        status.text(f"Saving {len(pending_updates)} new data points...")
         try:
             for row_idx, col_idx, val in pending_updates:
                 try:
@@ -327,16 +313,13 @@ if st.button("Run Full Analysis", type="primary"):
     est_income = portfolio['Est. Annual Income'].sum()
     yield_on_market = (est_income / total_value) * 100 if total_value > 0 else 0
     
-    if total_value > 0:
-        portfolio['Weight'] = portfolio['Market Value'] / total_value
-        portfolio_beta = (portfolio['Weight'] * portfolio['Beta']).sum()
-    else: portfolio_beta = 1.0
+    portfolio['Weight'] = portfolio['Market Value'] / total_value
+    portfolio_beta = (portfolio['Weight'] * portfolio['Beta']).sum() if total_value > 0 else 1.0
 
     if portfolio_beta > 1.15: risk_label = "Aggressive 🚀"; risk_msg = "Growth focus."
     elif portfolio_beta < 0.85: risk_label = "Defensive 🛡️"; risk_msg = "Preservation focus."
     else: risk_label = "Balanced ⚖️"; risk_msg = "Market tracking."
 
-    # Save History
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_history = history_sheet.get_all_values()
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
@@ -359,12 +342,15 @@ if st.button("Run Full Analysis", type="primary"):
     b4.metric("Strategy", risk_label)
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["🔎 Holdings Table", "📈 Wealth History", "🛠️ Data Inspector"])
+    tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
+        # TABLE
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
+        # HEATMAP FIX: Ensure purely numeric & clean strings
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
+            display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
 
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
@@ -377,10 +363,15 @@ if st.button("Run Full Analysis", type="primary"):
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
+            # TIGHTENED SCALES FOR VIBRANCY
+            .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-3, vmax=3)
+            .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
+            .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=600
         )
         
+        # CHART
         st.markdown("---")
         c_pie, c_blank = st.columns([1, 2])
         with c_pie:
@@ -399,6 +390,3 @@ if st.button("Run Full Analysis", type="primary"):
             h_df['Date'] = pd.to_datetime(h_df['Date']); h_df['Value'] = pd.to_numeric(h_df['Value'])
             st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
         except: st.info("No history yet.")
-
-    with tab3:
-        st.dataframe(portfolio[['Ticker', 'Analyst Upside', 'Target Price', 'Current Price']])
