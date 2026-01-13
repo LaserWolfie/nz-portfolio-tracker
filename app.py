@@ -119,7 +119,10 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: PRICE HISTORY ---
+    # --- STEP 2: PRICE HISTORY & BACKUP HIGH/LOW ---
+    # We will use this data to manually calculate 52W High/Low if Yahoo fails
+    price_history_cache = {} 
+    
     with st.spinner('Fetching portfolio prices...'):
         try:
             data = yf.download(ticker_list, period="1y")
@@ -135,9 +138,16 @@ if st.button("Run Full Analysis", type="primary"):
 
             for t in ticker_list:
                 try:
-                    if isinstance(close_data, pd.DataFrame) and t in close_data.columns: s = close_data[t].dropna()
-                    elif isinstance(close_data, pd.Series): s = close_data.dropna()
-                    else: s = pd.Series([])
+                    if isinstance(close_data, pd.DataFrame) and t in close_data.columns: 
+                        s = close_data[t].dropna()
+                    elif isinstance(close_data, pd.Series): 
+                        s = close_data.dropna()
+                    else: 
+                        s = pd.Series([])
+
+                    # Save for later backup calculation
+                    if len(s) > 0:
+                        price_history_cache[t] = s
 
                     curr = float(s.iloc[-1]) if len(s)>0 else 0.0
                     prev = float(s.iloc[-2]) if len(s)>=2 else curr
@@ -169,9 +179,9 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (ROBUST & SMART FALLBACKS) ---
+    # --- STEP 3: FUNDAMENTALS (ROBUST FALLBACKS) ---
     progress = st.progress(0); status = st.empty()
-    pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], [] # <--- Added new lists
+    pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], []
     
     # Read Sectors from Google Sheet
     if 'Sector' in portfolio.columns:
@@ -187,7 +197,7 @@ if st.button("Run Full Analysis", type="primary"):
             stock = yf.Ticker(t)
             info = stock.info 
             
-            # --- P/E & DIVIDEND ---
+            # --- P/E CHECK ---
             pe = info.get('trailingPE', None)
             if pe is None:
                 try:
@@ -196,6 +206,7 @@ if st.button("Run Full Analysis", type="primary"):
                     if price and eps and eps > 0: pe = price / eps
                 except: pass
             
+            # --- DIVIDEND CHECK ---
             div = info.get('dividendYield', None)
             if div is None: div = info.get('trailingAnnualDividendYield', None)
             if div is None: div = 0
@@ -203,14 +214,29 @@ if st.button("Run Full Analysis", type="primary"):
             
             if pe is None: pe = float('nan')
             
-            # --- 52 WEEK HIGH/LOW ---
-            lo = info.get('fiftyTwoWeekLow', float('nan'))
-            hi = info.get('fiftyTwoWeekHigh', float('nan'))
+            # --- 52 WEEK HIGH/LOW CHECK (3 LAYERS OF BACKUP) ---
+            lo = info.get('fiftyTwoWeekLow')
+            hi = info.get('fiftyTwoWeekHigh')
+            
+            # Backup 1: Regular Market Day
+            if lo is None: lo = info.get('regularMarketDayLow')
+            if hi is None: hi = info.get('regularMarketDayHigh')
+            
+            # Backup 2: Calculate manually from the history we just downloaded
+            if (lo is None or hi is None) and t in price_history_cache:
+                hist_series = price_history_cache[t]
+                if not hist_series.empty:
+                    if lo is None: lo = float(hist_series.min())
+                    if hi is None: hi = float(hist_series.max())
+
+            # Final Cleanup
+            if lo is None: lo = float('nan')
+            if hi is None: hi = float('nan')
             
             pe_ratios.append(pe)
             div_yields.append(div_pct)
-            lows_52w.append(lo) # <--- Append
-            highs_52w.append(hi) # <--- Append
+            lows_52w.append(lo)
+            highs_52w.append(hi)
             
             time.sleep(0.3) 
             
@@ -224,8 +250,8 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['P/E Ratio'] = pe_ratios
     portfolio['Div Yield %'] = div_yields
     portfolio['Sector'] = sectors
-    portfolio['52W Low'] = lows_52w # <--- Save to DF
-    portfolio['52W High'] = highs_52w # <--- Save to DF
+    portfolio['52W Low'] = lows_52w 
+    portfolio['52W High'] = highs_52w
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -298,7 +324,7 @@ if st.button("Run Full Analysis", type="primary"):
             st.dataframe(
                 display_df.style.format({
                     "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
-                    "52W Low": "${:.2f}", "52W High": "${:.2f}", # <--- Formatting added
+                    "52W Low": "${:.2f}", "52W High": "${:.2f}", 
                     "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
                     "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
                     "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
