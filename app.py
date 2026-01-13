@@ -132,7 +132,7 @@ if st.button("Run Full Analysis", type="primary"):
         except: pass
 
     # --- STEP 2: BULK PRICE & VOLUME HISTORY ---
-    # We now fetch Volume data here too
+    # Re-integrated Volume/Liquidity Logic
     with st.spinner('Fetching prices & volume...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -153,27 +153,21 @@ if st.button("Run Full Analysis", type="primary"):
                         closes = df_t['Close']
                         volumes = df_t['Volume'] if 'Volume' in df_t.columns else pd.Series([0]*len(closes))
                         
-                        # Price Data
                         curr = float(closes.iloc[-1])
                         prev = float(closes.iloc[-2]) if len(closes) >= 2 else curr
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
-                        # Volume Data
+                        # VOLUME CALCS
                         vol_today = float(volumes.iloc[-1])
-                        # Calculate 3-month (approx 65 trading days) average volume
                         vol_avg = volumes.iloc[-65:].mean() if len(volumes) > 0 else 0
                         
-                        # 1. Volume Ratio (Today / Avg)
-                        if vol_avg > 0:
-                            v_ratio = vol_today / vol_avg
-                        else:
-                            v_ratio = 0.0
-                            
-                        # 2. Daily Liquidity (Avg Volume * Price)
+                        if vol_avg > 0: v_ratio = vol_today / vol_avg
+                        else: v_ratio = 0.0
+                        
                         liquidity = vol_avg * curr
 
-                        # Beta
+                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -188,7 +182,6 @@ if st.button("Run Full Analysis", type="primary"):
                         betas.append(beta_val)
                         vol_ratios.append(v_ratio)
                         daily_liquidities.append(liquidity)
-                        
                     else: raise ValueError("No data")
                 except:
                     curr_prices.append(0.0); prev_prices.append(0.0)
@@ -234,8 +227,10 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # NO TARGET SANITY CHECK (Trusting user data)
+        # ANALYST SANITY (Trust User Data)
         price_now = portfolio.loc[i, 'Current Price']
+        if not pd.isna(curr_target) and price_now > 0:
+            if curr_target > (price_now * 5): curr_target = float('nan')
 
         # 2. FETCH MISSING
         fetch_needed = False
@@ -352,25 +347,36 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("View Opportunities & Volume Alerts", expanded=True):
-        c_insight1, c_insight2 = st.columns(2)
-        with c_insight1:
+    with st.expander("View Opportunities & Risks", expanded=True):
+        col_insight_1, col_insight_2 = st.columns(2)
+        
+        with col_insight_1:
             st.markdown("##### 🚀 Analyst Opportunities")
             opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values(by='Analyst Upside', ascending=False).head(3)
             if not opps.empty:
-                for _, r in opps.iterrows():
-                    st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside (Target: ${r['Target Price']:.2f})")
-            else: st.info("No major upside detected.")
-            
-        with c_insight2:
-            st.markdown("##### 🔊 Volume Alerts (Today)")
-            # Filter for stocks with Volume > 1.5x Average
+                for _, row in opps.iterrows():
+                    st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
+            else: st.info("No major upside opportunities detected.")
+
+            st.markdown("##### ⚠️ Valuation Risks (Target < Price)")
+            # This logic catches stocks where Target Price ($9.55) < Current Price ($10.70)
+            risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
+            if not risks.empty:
+                for _, row in risks.iterrows():
+                    st.error(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Downside (Target: ${row['Target Price']:.2f})")
+            else: st.success("No major valuation risks detected.")
+
+        with col_insight_2:
+            st.markdown("##### 🔊 Volume & Liquidity")
             vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
             if not vol_spikes.empty:
                 for _, r in vol_spikes.iterrows():
-                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume (Action!)")
-            else:
-                st.info("No unusual volume spikes today.")
+                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume")
+            else: st.info("Volume is normal today.")
+
+            low_liq = portfolio[portfolio['Daily Liquidity'] < 50000]
+            if not low_liq.empty:
+                st.caption(f"⚠️ Low Liquidity (<$50k/day): {', '.join(low_liq['Ticker'].tolist())}")
 
     st.markdown("---")
 
@@ -397,7 +403,7 @@ if st.button("Run Full Analysis", type="primary"):
         # TABLE PREP
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Vol Ratio', 'Daily Liquidity', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
-        # CREATE CLICKABLE URLS
+        # CLICKABLE URLS
         display_df['URL'] = "https://finance.yahoo.com/quote/" + portfolio['Yahoo_Ticker']
         display_df['Ticker'] = display_df['URL']
         
@@ -422,14 +428,14 @@ if st.button("Run Full Analysis", type="primary"):
             .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
             .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
-            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5), # Hot volume = Red
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
             column_config={
                 "Ticker": st.column_config.LinkColumn(
                     "Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"
                 ),
                 "URL": None,
                 "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
-                "Daily Liquidity": st.column_config.NumberColumn("Liquidity (Day)", help="Avg Daily Volume x Price")
+                "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Daily Traded Value ($)")
             },
             use_container_width=True, height=600
         )
@@ -438,7 +444,6 @@ if st.button("Run Full Analysis", type="primary"):
         st.markdown("---")
         st.subheader("📊 Portfolio Composition")
         c_sector, c_stock = st.columns(2)
-        
         with c_sector:
             st.caption("By Sector")
             if 'Sector' in portfolio.columns:
@@ -463,7 +468,7 @@ if st.button("Run Full Analysis", type="primary"):
                 fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig2)
 
-        # BAR CHART - TOTAL RETURN
+        # BAR CHART
         st.markdown("---")
         st.subheader("🚀 Total Return by Stock")
         perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
