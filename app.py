@@ -176,10 +176,10 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (MARKET CAP + UPSIDE) ---
+    # --- STEP 3: FUNDAMENTALS ---
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], []
-    market_caps, analyst_upsides = [], [] # <--- New Lists
+    market_caps, analyst_upsides = [], []
     
     if 'Sector' in portfolio.columns:
         sectors = portfolio['Sector'].fillna("Unknown").tolist()
@@ -194,7 +194,7 @@ if st.button("Run Full Analysis", type="primary"):
             stock = yf.Ticker(t)
             info = stock.info 
             
-            # --- P/E ---
+            # P/E
             pe = info.get('trailingPE', None)
             if pe is None:
                 try:
@@ -203,13 +203,13 @@ if st.button("Run Full Analysis", type="primary"):
                     if price and eps and eps > 0: pe = price / eps
                 except: pass
             
-            # --- DIVIDEND ---
+            # DIVIDEND
             div = info.get('dividendYield', None)
             if div is None: div = info.get('trailingAnnualDividendYield', None)
             if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
             
-            # --- 52 WEEK HIGH/LOW ---
+            # HIGH/LOW
             lo = info.get('fiftyTwoWeekLow')
             hi = info.get('fiftyTwoWeekHigh')
             if lo is None: lo = info.get('regularMarketDayLow')
@@ -220,10 +220,8 @@ if st.button("Run Full Analysis", type="primary"):
                     if lo is None: lo = float(hist_series.min())
                     if hi is None: hi = float(hist_series.max())
 
-            # --- MARKET CAP ---
+            # MARKET CAP & UPSIDE
             mcap = info.get('marketCap', float('nan'))
-
-            # --- ANALYST TARGET & UPSIDE ---
             target = info.get('targetMeanPrice', None)
             current_p = info.get('currentPrice', None)
             if current_p is None: current_p = info.get('regularMarketPreviousClose', None)
@@ -233,7 +231,6 @@ if st.button("Run Full Analysis", type="primary"):
             else:
                 upside = float('nan')
 
-            # Formatting safety
             if pe is None: pe = float('nan')
             if lo is None: lo = float('nan')
             if hi is None: hi = float('nan')
@@ -242,8 +239,8 @@ if st.button("Run Full Analysis", type="primary"):
             div_yields.append(div_pct)
             lows_52w.append(lo)
             highs_52w.append(hi)
-            market_caps.append(mcap)       # <--- Add
-            analyst_upsides.append(upside) # <--- Add
+            market_caps.append(mcap)
+            analyst_upsides.append(upside)
             
             time.sleep(0.3) 
             
@@ -261,8 +258,8 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Sector'] = sectors
     portfolio['52W Low'] = lows_52w 
     portfolio['52W High'] = highs_52w
-    portfolio['Market Cap'] = market_caps # <--- Save
-    portfolio['Analyst Upside'] = analyst_upsides # <--- Save
+    portfolio['Market Cap'] = market_caps
+    portfolio['Analyst Upside'] = analyst_upsides
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -322,33 +319,41 @@ if st.button("Run Full Analysis", type="primary"):
     b4.metric("Strategy", risk_label)
     st.caption(f"Risk Assessment: {risk_msg}")
 
-    # --- CHARTS ---
+    # --- CHARTS & TABLE ---
     st.markdown("---")
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        col_table, col_pie = st.columns([2.5, 1])
-        with col_table:
-            display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
-            display_df = display_df.sort_values(by='Total Gain %', ascending=False)
-            
-            st.dataframe(
-                display_df.style.format({
-                    "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
-                    "52W Low": "${:.2f}", "52W High": "${:.2f}", 
-                    "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
-                    "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
-                    "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
-                    "P/E Ratio": "{:.1f}", "Market Cap": "${:,.0f}",
-                    "Analyst Upside": "{:+.2f}%"
-                }, na_rep="-")
-                .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
-                .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
-                .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30) # Green if analysts predict growth
-                .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
-                use_container_width=True, height=600
-            )
-        with col_pie:
+        # 1. TABLE SECTION (FULL WIDTH)
+        display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
+        display_df = display_df.sort_values(by='Total Gain %', ascending=False)
+        
+        st.dataframe(
+            display_df.style.format({
+                "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
+                "52W Low": "${:.2f}", "52W High": "${:.2f}", 
+                "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
+                "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
+                "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
+                "P/E Ratio": "{:.1f}", "Market Cap": "${:,.0f}",
+                "Analyst Upside": "{:+.2f}%"
+            }, na_rep="-")
+            .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
+            .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
+            .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
+            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+            use_container_width=True, height=600
+        )
+
+        # 2. CHART SECTION (BELOW TABLE)
+        st.markdown("---")
+        st.subheader("📊 Portfolio Composition")
+        
+        # We use columns to keep the pie chart sized reasonably
+        # Left column (Chart) | Right column (Empty for future charts)
+        chart_c1, chart_c2 = st.columns([1, 2])
+        
+        with chart_c1:
             if 'Sector' in portfolio.columns and not portfolio['Sector'].isnull().all():
                 sector_group = portfolio.groupby('Sector')['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
@@ -359,6 +364,9 @@ if st.button("Run Full Analysis", type="primary"):
                 st.pyplot(fig)
             else:
                 st.warning("Pie Chart unavailable (No Sector data)")
+        
+        with chart_c2:
+            st.info("💡 Tip: The space on this side is now open for adding 'Top Winners' or 'Dividend History' charts in the future!")
 
     with tab2:
         try:
