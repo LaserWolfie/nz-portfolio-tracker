@@ -9,7 +9,6 @@ from datetime import datetime
 import time
 
 # --- CONFIGURATION ---
-# I have added the quotes to fix the SyntaxError
 PORTFOLIO_SHEET_NAME = "Share Portfolio" 
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
@@ -48,7 +47,7 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # Smart Mapping for columns
+    # Smart Mapping for columns (Maintaining AB column logic)
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -70,6 +69,7 @@ try:
 
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
+    # This reads the manual targets (ATM $9.55, EBO $37.25) from your sheet
     portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
     
@@ -116,28 +116,36 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
     portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
     portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
+    # Manual Target vs Live Price
     portfolio['Analyst Upside'] = ((portfolio['Analyst Target'] - portfolio['Current Price']) / portfolio['Current Price']) * 100
     total_value = portfolio['Market Value'].sum()
 
-    # --- MACRO OVERLAY ---
+    # --- MACRO OVERLAY (FIXED INDEXING) ---
     if has_macro:
         st.subheader("🧠 Macro Strategy Overlay")
-        macro_vals = macro_sheet.get("C3:C16")
-        regime, score, sentiment, target_pct = macro_vals[0][0], macro_vals[2][0], macro_vals[8][0], clean_number(macro_vals[13][0]) / 100
-        
-        target_val = total_value * target_pct
-        gap = total_value - target_val
+        try:
+            # Safer way to read specific cells to avoid IndexError
+            regime = macro_sheet.acell('C3').value
+            score = macro_sheet.acell('C5').value
+            sentiment = macro_sheet.acell('C11').value
+            target_raw = macro_sheet.acell('C16').value
+            target_pct = clean_number(target_raw) / 100
+            
+            target_val = total_value * target_pct
+            gap = total_value - target_val
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Regime", regime)
-        m2.metric("Macro Score", score)
-        m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in sentiment else "normal")
-        
-        action = "✅ On Target"
-        if gap > 5000: action = f"⚠️ SELL ${gap:,.0f}"
-        elif gap < -5000: action = f"🛒 BUY ${abs(gap):,.0f}"
-        m4.metric("Action Signal", action, f"Target: {target_pct*100:.0f}%")
-        st.progress(target_pct, text=f"System Target Allocation: {target_pct*100:.1f}%")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Regime", regime) # Expansion
+            m2.metric("Macro Score", score) # 4
+            m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in sentiment else "normal") # Euphoric
+            
+            action = "✅ On Target"
+            if gap > 5000: action = f"⚠️ SELL ${gap:,.0f}"
+            elif gap < -5000: action = f"🛒 BUY ${abs(gap):,.0f}"
+            m4.metric("Action Signal", action, f"Target: {target_pct*100:.0f}%")
+            st.progress(target_pct, text=f"System Target Allocation: {target_pct*100:.1f}%")
+        except Exception as macro_err:
+            st.warning(f"Could not parse Macro Dashboard cells: {macro_err}")
 
     # --- KEY INSIGHTS & ALERTS ---
     st.subheader("💡 Key Portfolio Insights")
@@ -154,15 +162,17 @@ if st.button("Run Full Analysis", type="primary"):
             
         with c_ins2:
             st.markdown("##### 🔊 Volume & Liquidity")
+            # Vol Ratio Alert
             vol = portfolio[portfolio['Vol Ratio'] > 1.5]
             for _, r in vol.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x average)")
             
+            # Liquidity Alert
             liq = portfolio[portfolio['Daily Liquidity'] < 50000]
             for _, r in liq.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day)")
 
     st.markdown("---")
     
-    # Holdings Table
+    # Holdings Table (Maintaining layout from image_203210.png)
     st.subheader("📊 Portfolio Performance")
     st.dataframe(
         portfolio[['Ticker', 'Analyst Upside', 'Current Price', 'Total Gain %', 'Vol Ratio', 'Daily Liquidity', 'Market Value']].style.format({
@@ -174,7 +184,7 @@ if st.button("Run Full Analysis", type="primary"):
         use_container_width=True
     )
 
-    # Charts
+    # Donut Charts (Maintaining side-by-side from image_20324d.png)
     st.markdown("### 🥧 Composition")
     c_pie1, c_pie2 = st.columns(2)
     with c_pie1:
@@ -182,11 +192,18 @@ if st.button("Run Full Analysis", type="primary"):
         if col_map['Sector'] in portfolio.columns:
             sector_data = portfolio.groupby(col_map['Sector'])['Market Value'].sum()
             fig1, ax1 = plt.subplots(figsize=(5,5)); fig1.patch.set_facecolor('#0E1117'); ax1.set_facecolor('#0E1117')
-            ax1.pie(sector_data, labels=sector_data.index, autopct='%1.0f%%', textprops={'color':"white"})
+            # Use autopct for percentages shown in image_20324d.png
+            ax1.pie(sector_data, labels=sector_data.index, autopct='%1.0f%%', textprops={'color':"white"}, pctdistance=0.85)
+            # Create a donut hole
+            centre_circle = plt.Circle((0,0),0.70,fc='#0E1117')
+            fig1.gca().add_artist(centre_circle)
             st.pyplot(fig1)
 
     with c_pie2:
         st.caption("By Stock")
         fig2, ax2 = plt.subplots(figsize=(5,5)); fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-        ax2.pie(portfolio['Market Value'], labels=portfolio['Ticker'], autopct='%1.0f%%', textprops={'color':"white"})
+        ax2.pie(portfolio['Market Value'], labels=portfolio['Ticker'], autopct='%1.0f%%', textprops={'color':"white"}, pctdistance=0.85)
+        # Create a donut hole
+        centre_circle2 = plt.Circle((0,0),0.70,fc='#0E1117')
+        fig2.gca().add_artist(centre_circle2)
         st.pyplot(fig2)
