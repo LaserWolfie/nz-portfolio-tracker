@@ -477,7 +477,9 @@ if st.button("Run Full Analysis", type="primary"):
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
             .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
             column_config={
-                "Ticker": st.column_config.LinkColumn("Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"),
+                "Ticker": st.column_config.LinkColumn(
+                    "Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"
+                ),
                 "URL": None,
                 "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
                 "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Avg Daily Volume x Price")
