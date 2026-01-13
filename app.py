@@ -171,7 +171,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- STEP 3: FUNDAMENTALS (ROBUST & SMART FALLBACKS) ---
     progress = st.progress(0); status = st.empty()
-    pe_ratios, div_yields = [], []
+    pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], [] # <--- Added new lists
     
     # Read Sectors from Google Sheet
     if 'Sector' in portfolio.columns:
@@ -187,44 +187,45 @@ if st.button("Run Full Analysis", type="primary"):
             stock = yf.Ticker(t)
             info = stock.info 
             
-            # --- SMART P/E CHECK ---
-            # 1. Try standard Trailing P/E
+            # --- P/E & DIVIDEND ---
             pe = info.get('trailingPE', None)
-            
-            # 2. If missing, try Manual Calc (Price / Trailing EPS)
             if pe is None:
                 try:
                     price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
                     eps = info.get('trailingEps')
-                    if price and eps and eps > 0:
-                        pe = price / eps
-                except:
-                    pass
+                    if price and eps and eps > 0: pe = price / eps
+                except: pass
             
-            # --- SMART DIVIDEND CHECK ---
             div = info.get('dividendYield', None)
-            if div is None:
-                div = info.get('trailingAnnualDividendYield', None)
-            if div is None: 
-                div = 0
+            if div is None: div = info.get('trailingAnnualDividendYield', None)
+            if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
             
-            # Formatting safety
             if pe is None: pe = float('nan')
+            
+            # --- 52 WEEK HIGH/LOW ---
+            lo = info.get('fiftyTwoWeekLow', float('nan'))
+            hi = info.get('fiftyTwoWeekHigh', float('nan'))
             
             pe_ratios.append(pe)
             div_yields.append(div_pct)
+            lows_52w.append(lo) # <--- Append
+            highs_52w.append(hi) # <--- Append
             
             time.sleep(0.3) 
             
         except:
             pe_ratios.append(float('nan'))
             div_yields.append(0)
+            lows_52w.append(float('nan'))
+            highs_52w.append(float('nan'))
             
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
     portfolio['Div Yield %'] = div_yields
     portfolio['Sector'] = sectors
+    portfolio['52W Low'] = lows_52w # <--- Save to DF
+    portfolio['52W High'] = highs_52w # <--- Save to DF
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -291,12 +292,13 @@ if st.button("Run Full Analysis", type="primary"):
     with tab1:
         col_table, col_pie = st.columns([2.5, 1])
         with col_table:
-            display_df = portfolio[['Ticker', 'Sector', 'Current Price', 'Beta', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
+            display_df = portfolio[['Ticker', 'Sector', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
             display_df = display_df.sort_values(by='Total Gain %', ascending=False)
             
             st.dataframe(
                 display_df.style.format({
                     "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
+                    "52W Low": "${:.2f}", "52W High": "${:.2f}", # <--- Formatting added
                     "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
                     "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
                     "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
@@ -306,7 +308,6 @@ if st.button("Run Full Analysis", type="primary"):
                 .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
                 .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
                 .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
-                .background_gradient(subset=['Beta'], cmap="coolwarm", vmin=0.5, vmax=1.5)
                 .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
                 use_container_width=True, height=600
             )
