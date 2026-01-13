@@ -9,9 +9,9 @@ from datetime import datetime
 import time
 
 # --- CONFIGURATION ---
+# I have added the quotes to fix the SyntaxError
 PORTFOLIO_SHEET_NAME = "Share Portfolio" 
-# PASTE YOUR FULL MACRO SHEET URL HERE
-MACRO_SHEET_URL = https://docs.google.com/spreadsheets/d/1_Fj4lKv2esBxwwVn-ALfHNJp3OGNUChe8lQ5zfMkzD0/edit?gid=1442065005#gid=1442065005
+MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Portfolio Manager", page_icon="🥝", layout="wide")
@@ -48,7 +48,7 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # Smart Mapping
+    # Smart Mapping for columns
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -175,15 +175,18 @@ if st.button("Run Full Analysis", type="primary"):
     )
 
     # Charts
-    c_pie, c_bar = st.columns(2)
-    with c_pie:
-        fig, ax = plt.subplots(figsize=(5,5)); fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-        ax.pie(portfolio['Market Value'], labels=portfolio['Ticker'], autopct='%1.0f%%', textprops={'color':"white"})
-        st.pyplot(fig)
-    
-    with c_bar:
-        perf = portfolio.sort_values('Total Gain %')
+    st.markdown("### 🥧 Composition")
+    c_pie1, c_pie2 = st.columns(2)
+    with c_pie1:
+        st.caption("By Sector")
+        if col_map['Sector'] in portfolio.columns:
+            sector_data = portfolio.groupby(col_map['Sector'])['Market Value'].sum()
+            fig1, ax1 = plt.subplots(figsize=(5,5)); fig1.patch.set_facecolor('#0E1117'); ax1.set_facecolor('#0E1117')
+            ax1.pie(sector_data, labels=sector_data.index, autopct='%1.0f%%', textprops={'color':"white"})
+            st.pyplot(fig1)
+
+    with c_pie2:
+        st.caption("By Stock")
         fig2, ax2 = plt.subplots(figsize=(5,5)); fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-        colors = ['#00FF00' if x >= 0 else '#FF0000' for x in perf['Total Gain %']]
-        ax2.bar(perf['Ticker'], perf['Total Gain %'], color=colors); ax2.tick_params(axis='x', colors='white', rotation=45); ax2.tick_params(axis='y', colors='white')
+        ax2.pie(portfolio['Market Value'], labels=portfolio['Ticker'], autopct='%1.0f%%', textprops={'color':"white"})
         st.pyplot(fig2)
