@@ -21,11 +21,9 @@ BENCHMARK_TICKER = "^NZ50"
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # 1. Try Streamlit Secrets (Cloud)
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    # 2. Try Local File (Laptop)
     else:
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         
@@ -45,14 +43,13 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # Validate Columns
     required_cols = ['Ticker', 'Shares', 'Purchase Price']
     for col in required_cols:
         if col not in df.columns:
             st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
             st.stop()
             
-    # SMART MAPPING (Finds your columns automatically)
+    # SMART MAPPING
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -68,7 +65,7 @@ try:
 
     # --- CLEANING FUNCTIONS ---
     def clean_number(x):
-        """Robust cleaner for Manual Entries"""
+        """Robust cleaner"""
         if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A']: return float('nan')
         if isinstance(x, (int, float)): return float(x)
         
@@ -113,7 +110,7 @@ except Exception as e:
     st.stop()
 
 # --- MAIN DASHBOARD ---
-force_fresh = st.checkbox("Force Fresh Data from Yahoo (May fail if blocked)", value=False)
+force_fresh = st.checkbox("Force Fresh Data (Ignore Sheet)", help="Check this to force a re-download from Yahoo.")
 
 if st.button("Run Full Analysis", type="primary"):
     
@@ -134,7 +131,7 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: BULK PRICE HISTORY (Fast & Reliable) ---
+    # --- STEP 2: BULK PRICE HISTORY ---
     with st.spinner('Fetching prices...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -183,7 +180,7 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: HYBRID ANALYST FETCH (MANUAL PRIORITY) ---
+    # --- STEP 3: HYBRID ANALYST FETCH ---
     progress = st.progress(0); status = st.empty()
     
     final_pe, final_div, final_mcap, final_upside, final_targets = [], [], [], [], []
@@ -196,8 +193,7 @@ if st.button("Run Full Analysis", type="primary"):
         status.text(f"Analysing {t}...")
         progress.progress((i+1)/len(portfolio))
         
-        # 1. READ FROM SHEET (Manual Entry)
-        # If force_fresh is False (default), we TRUST your spreadsheet first.
+        # 1. READ FROM SHEET (Manual Entry Priority)
         if force_fresh:
             curr_mcap = curr_target = curr_pe = curr_div_pct = curr_52h = curr_52l = float('nan')
         else:
@@ -208,11 +204,16 @@ if st.button("Run Full Analysis", type="primary"):
             curr_52h = clean_number(row.get(col_map['52W High']))
             curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # SANITY CHECK: If Sheet has "2000" for a "$2" stock, it's garbage. Ignore it.
+        # DIVIDEND SANITY FIX: If Yield > 30%, it's likely a scaling error (545% -> 5.45%)
+        if not pd.isna(curr_div_pct) and curr_div_pct > 30:
+            curr_div_pct = curr_div_pct / 100
+
+        # ANALYST TARGET SANITY CHECK
         price_now = portfolio.loc[i, 'Current Price']
         if not pd.isna(curr_target) and price_now > 0:
             if curr_target > (price_now * 5): 
-                curr_target = float('nan') # Ignore bad sheet data
+                # This catches the "$2,417" vs "$11" error
+                curr_target = float('nan')
 
         # 2. FETCH FROM YAHOO (Only if data is missing)
         fetch_needed = False
@@ -223,7 +224,7 @@ if st.button("Run Full Analysis", type="primary"):
             try:
                 stock = yf.Ticker(t)
                 
-                # Fast Info (Market Cap / High / Low)
+                # Fast Info
                 try:
                     if hasattr(stock, 'fast_info'):
                         if pd.isna(curr_mcap) and stock.fast_info.market_cap:
@@ -242,15 +243,12 @@ if st.button("Run Full Analysis", type="primary"):
                                 pending_updates.append((i+2, df.columns.get_loc(col_map['52W Low'])+1, curr_52l))
                 except: pass
 
-                # Deep Info (Analyst Target / P/E / Div)
+                # Deep Info
                 try:
                     info = stock.info
                     
-                    # TARGET - Check 3 places
-                    tgt = info.get('targetMeanPrice')
-                    if not tgt: tgt = info.get('targetMedianPrice')
-                    if not tgt: tgt = info.get('targetHighPrice')
-                    
+                    # Target
+                    tgt = info.get('targetMeanPrice') or info.get('targetMedianPrice')
                     if tgt and pd.isna(curr_target):
                         curr_target = tgt
                         if col_map['Analyst Target'] in df.columns:
@@ -263,7 +261,7 @@ if st.button("Run Full Analysis", type="primary"):
                         if col_map['P/E'] in df.columns:
                             pending_updates.append((i+2, df.columns.get_loc(col_map['P/E'])+1, curr_pe))
 
-                    # DIV
+                    # Dividend
                     div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
                     if div and pd.isna(curr_div_pct):
                         curr_div_pct = div * 100
@@ -274,7 +272,7 @@ if st.button("Run Full Analysis", type="primary"):
                 except: pass
             except: pass
 
-        # 3. Store for UI
+        # 3. Store
         final_pe.append(curr_pe)
         final_div.append(curr_div_pct)
         final_mcap.append(curr_mcap)
@@ -282,7 +280,7 @@ if st.button("Run Full Analysis", type="primary"):
         final_52_lo.append(curr_52l)
         final_targets.append(curr_target)
         
-        # 4. UPSIDE CALCULATION (Hybrid)
+        # 4. Upside Calculation
         if not pd.isna(curr_target) and price_now > 0:
             upside_val = ((curr_target - price_now) / price_now) * 100
         else:
@@ -310,7 +308,7 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['52W High'] = final_52_hi
     portfolio['Target Price'] = final_targets
 
-    # --- CALCULATIONS & METRICS ---
+    # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
     portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
     portfolio['Total Gain $'] = portfolio['Market Value'] - portfolio['Cost Basis']
@@ -403,5 +401,4 @@ if st.button("Run Full Analysis", type="primary"):
         except: st.info("No history yet.")
 
     with tab3:
-        st.warning("If 'Target Price' is blank below, Yahoo has no data. SOLUTION: Type a target price into Column AB of your Google Sheet.")
         st.dataframe(portfolio[['Ticker', 'Analyst Upside', 'Target Price', 'Current Price']])
