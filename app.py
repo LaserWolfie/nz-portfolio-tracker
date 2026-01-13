@@ -9,8 +9,24 @@ from datetime import datetime
 import time
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
-st.title("🥝 NZ Portfolio Analyzer")
+st.set_page_config(page_title="NZ Portfolio Manager", page_icon="🥝", layout="wide")
+st.title("🥝 NZ Portfolio Manager")
+
+# --- DASHBOARD EXPLANATION (NEW) ---
+with st.expander("📘 How to Use This Dashboard"):
+    st.markdown("""
+    **1. Macro Strategy Engine:**
+    * **Regime Change (Cell C23):** Your primary cycle indicator (e.g., "Risk-On").
+    * **Strategy Toggles (Sidebar):**
+        * *Cycle Purist:* Strictly follows your spreadsheet's 15% Equity target.
+        * *Momentum Chaser:* Ignores "Euphoria" warnings if the Macro Score is positive (Target: 70%).
+        * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric) to protect capital.
+    
+    **2. The "Hybrid" Data Engine:**
+    * **Live Prices:** Real-time data from Yahoo Finance.
+    * **Analyst Targets:** Prioritizes the manual targets you enter in your Google Sheet (Column AB).
+    * **Liquidity:** Flags stocks trading <$50k/day as "Hard to Sell."
+    """)
 
 # --- CONFIGURATION ---
 SHEET_NAME = "Share Portfolio" 
@@ -77,7 +93,6 @@ try:
         'Div Yield': next((c for c in df.columns if 'Div' in c and 'Yield' in c), 'Div Yield'),
         '52W High': next((c for c in df.columns if '52' in c and 'High' in c), '52W High'),
         '52W Low': next((c for c in df.columns if '52' in c and 'Low' in c), '52W Low'),
-        'Insider': next((c for c in df.columns if 'Insider' in c), 'Insider Activity'),
         'Sector': next((c for c in df.columns if 'Sector' in c), 'Sector')
     }
 
@@ -192,7 +207,6 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
-                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -347,25 +361,21 @@ if st.button("Run Full Analysis", type="primary"):
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- MACRO STRATEGY ENGINE (UPDATED) ---
+    # --- MACRO STRATEGY ENGINE (WITH REGIME FIX) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
             # READ CELLS
-            # C3 = "Expansion" (Regime)
             regime = macro_sheet.acell('C3').value 
-            # C5 = "4" (Score)
             score_val = macro_sheet.acell('C5').value
             score = float(score_val) if score_val else 0.0
-            # C11 = "Euphoric" (Sentiment)
             sentiment = macro_sheet.acell('C11').value 
-            # C16 = "15.00%" (Equity Target)
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
-            # C23 = "Risk-On / Early Expansion" (Regime Change)
-            regime_change = macro_sheet.acell('C23').value
+            
+            # --- THE FIX: PULL REGIME CHANGE FROM C23 ---
+            regime_change = macro_sheet.acell('C23').value #
 
-            # Fallback for main regime if empty
             if not regime or regime.strip() in ['-', '—', '']:
                 regime = "Regime Loading..."
                 
@@ -385,7 +395,7 @@ if st.button("Run Full Analysis", type="primary"):
                 target_pct = sheet_target; logic_msg = "✅ Following Sheet Cycle Logic exactly."
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Regime Change (Main)", regime_change, help="Key Indicator from Cell C23")
+            m1.metric("Regime Change (Signal)", regime_change, help="Primary Signal from Cell C23")
             m2.metric("Macro Score", f"{score}")
             m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
             m4.metric("Target Equity %", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
