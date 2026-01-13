@@ -9,22 +9,21 @@ from datetime import datetime
 import time
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="NZ Portfolio Manager", page_icon="🥝", layout="wide")
-st.title("🥝 NZ Portfolio Manager")
+st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
+st.title("🥝 NZ Portfolio Analyzer")
 
-# --- DASHBOARD EXPLANATION (NEW) ---
+# --- DASHBOARD NOTES ---
 with st.expander("📘 How to Use This Dashboard"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Change (Cell C23):** Your primary cycle indicator (e.g., "Risk-On").
+    * **Regime Change (Cell C23):** Your primary cycle indicator (e.g., "Risk-On / Early Expansion").
     * **Strategy Toggles (Sidebar):**
-        * *Cycle Purist:* Strictly follows your spreadsheet's 15% Equity target.
+        * *Cycle Purist:* Follows your spreadsheet's 15% Equity target exactly.
         * *Momentum Chaser:* Ignores "Euphoria" warnings if the Macro Score is positive (Target: 70%).
         * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric) to protect capital.
     
     **2. The "Hybrid" Data Engine:**
-    * **Live Prices:** Real-time data from Yahoo Finance.
-    * **Analyst Targets:** Prioritizes the manual targets you enter in your Google Sheet (Column AB).
+    * **Analyst Targets:** Prioritizes manual targets from your Google Sheet (Col AB) over Yahoo data.
     * **Liquidity:** Flags stocks trading <$50k/day as "Hard to Sell."
     """)
 
@@ -361,21 +360,25 @@ if st.button("Run Full Analysis", type="primary"):
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- MACRO STRATEGY ENGINE (WITH REGIME FIX) ---
+    # --- MACRO STRATEGY ENGINE (WITH C23 FIX) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
-            # READ CELLS
+            # Safe Single-Cell Reads (No Indexes)
+            # C3 = "Expansion" (Regime)
             regime = macro_sheet.acell('C3').value 
+            # C5 = "4" (Score)
             score_val = macro_sheet.acell('C5').value
             score = float(score_val) if score_val else 0.0
+            # C11 = "Euphoric" (Sentiment)
             sentiment = macro_sheet.acell('C11').value 
+            # C16 = "15.00%" (Equity Target)
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
-            
-            # --- THE FIX: PULL REGIME CHANGE FROM C23 ---
-            regime_change = macro_sheet.acell('C23').value #
+            # C23 = "Risk-On / Early Expansion" (Regime Change)
+            regime_change = macro_sheet.acell('C23').value
 
+            # Fallback for main regime if empty
             if not regime or regime.strip() in ['-', '—', '']:
                 regime = "Regime Loading..."
                 
