@@ -208,10 +208,8 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # ANALYST SANITY
+        # NO MORE TARGET SANITY CHECK (User Confirmed Data is Correct)
         price_now = portfolio.loc[i, 'Current Price']
-        if not pd.isna(curr_target) and price_now > 0:
-            if curr_target > (price_now * 5): curr_target = float('nan')
 
         # 2. FETCH MISSING
         fetch_needed = False
@@ -317,16 +315,48 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Weight'] = portfolio['Market Value'] / total_value
     portfolio_beta = (portfolio['Weight'] * portfolio['Beta']).sum() if total_value > 0 else 1.0
 
-    if portfolio_beta > 1.15: risk_label = "Aggressive 🚀"; risk_msg = "Growth focus."
-    elif portfolio_beta < 0.85: risk_label = "Defensive 🛡️"; risk_msg = "Preservation focus."
-    else: risk_label = "Balanced ⚖️"; risk_msg = "Market tracking."
-
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_history = history_sheet.get_all_values()
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- UI ---
+    # --- KEY INSIGHTS SECTION (NEW) ---
+    st.subheader("💡 Key Portfolio Insights")
+    with st.expander("Click to view Analyst Opportunities & Market Context", expanded=True):
+        col_insight_1, col_insight_2 = st.columns(2)
+        
+        # 1. Analyst Opportunities
+        with col_insight_1:
+            st.markdown("##### 🚀 Top Analyst Picks (Based on your targets)")
+            # Filter for stocks with positive upside
+            opportunities = portfolio[portfolio['Analyst Upside'] > 0].sort_values(by='Analyst Upside', ascending=False).head(3)
+            if not opportunities.empty:
+                for idx, row in opportunities.iterrows():
+                    st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
+            else:
+                st.info("No stocks currently trading below analyst targets.")
+
+            st.markdown("##### ⚠️ Valuation Risks")
+            risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
+            if not risks.empty:
+                for idx, row in risks.iterrows():
+                    st.error(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Downside (Target: ${row['Target Price']:.2f})")
+            else:
+                st.success("No major valuation risks detected.")
+
+        # 2. Market Context (Manual/Static News - Updated Jan 2026)
+        with col_insight_2:
+            st.markdown("##### 📰 Recent Market Context")
+            st.info("""
+            * **Infratil (IFT):** Recently received an investment-grade BBB+ credit rating from S&P. First-half earnings showed solid operational EBITDAF growth (+7%).
+            * **EBOS Group (EBO):** Delivered a record full-year result with double-digit revenue growth, driven by its Healthcare segment.
+            * **Skellerup (SKL):** Achieved record EBIT of $78m, showing resilience in industrial markets despite agri-sector headwinds.
+            * **Sector Watch:** The NZ Healthcare sector (OCA, RYM) remains in focus as interest rate outlooks stabilize.
+            """)
+
+    st.markdown("---")
+
+    # --- METRICS UI ---
     st.subheader("📊 Portfolio Health")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Portfolio Value", f"${total_value:,.2f}")
@@ -340,7 +370,10 @@ if st.button("Run Full Analysis", type="primary"):
     b1.metric("NZX 50 Today", f"{market_return_pct:+.2f}%")
     b2.metric("Alpha", f"{(day_gain_val/(total_value-day_gain_val)*100 - market_return_pct):+.2f}%")
     b3.metric("Beta", f"{portfolio_beta:.2f}")
-    b4.metric("Strategy", risk_label)
+    if portfolio_beta > 1.15: risk_lbl = "Aggressive 🚀"
+    elif portfolio_beta < 0.85: risk_lbl = "Defensive 🛡️"
+    else: risk_lbl = "Balanced ⚖️"
+    b4.metric("Strategy", risk_lbl)
 
     st.markdown("---")
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
@@ -350,10 +383,7 @@ if st.button("Run Full Analysis", type="primary"):
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
         # CREATE CLICKABLE URLS
-        # 1. Create a URL column (hidden)
         display_df['URL'] = "https://finance.yahoo.com/quote/" + portfolio['Yahoo_Ticker']
-        
-        # 2. Swap 'Ticker' content with URL
         display_df['Ticker'] = display_df['URL']
         
         # HEATMAP FIX
@@ -380,9 +410,9 @@ if st.button("Run Full Analysis", type="primary"):
             column_config={
                 "Ticker": st.column_config.LinkColumn(
                     "Ticker", 
-                    display_text=r"https://finance\.yahoo\.com/quote/(.*)" # Regex to extract ticker
+                    display_text=r"https://finance\.yahoo\.com/quote/(.*)"
                 ),
-                "URL": None # Hide the raw URL column
+                "URL": None
             },
             use_container_width=True, height=600
         )
@@ -416,7 +446,7 @@ if st.button("Run Full Analysis", type="primary"):
                 fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig2)
 
-        # BAR CHART - TOTAL RETURN
+        # BAR CHART
         st.markdown("---")
         st.subheader("🚀 Total Return by Stock")
         perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
