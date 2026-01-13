@@ -192,6 +192,7 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
+                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -346,23 +347,28 @@ if st.button("Run Full Analysis", type="primary"):
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- MACRO STRATEGY ENGINE (WITH FIX) ---
+    # --- MACRO STRATEGY ENGINE (UPDATED) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
-            # Safe Reads
+            # READ CELLS
+            # C3 = "Expansion" (Regime)
             regime = macro_sheet.acell('C3').value 
-            score = float(macro_sheet.acell('C5').value)
+            # C5 = "4" (Score)
+            score_val = macro_sheet.acell('C5').value
+            score = float(score_val) if score_val else 0.0
+            # C11 = "Euphoric" (Sentiment)
             sentiment = macro_sheet.acell('C11').value 
+            # C16 = "15.00%" (Equity Target)
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
-            
-            # --- FALLBACK LOGIC FOR REGIME ---
-            # If C3 comes back as empty, dash, or error, infer it from the Score
-            if not regime or regime.strip() in ['-', '—', '']:
-                if score > 0: regime = "Expansion (Inferred)"
-                else: regime = "Contraction (Inferred)"
+            # C23 = "Risk-On / Early Expansion" (Regime Change)
+            regime_change = macro_sheet.acell('C23').value
 
+            # Fallback for main regime if empty
+            if not regime or regime.strip() in ['-', '—', '']:
+                regime = "Regime Loading..."
+                
             # --- STRATEGY LOGIC ---
             if strategy_mode == "Momentum Chaser (Growth)":
                 if score > 0: 
@@ -371,7 +377,7 @@ if st.button("Run Full Analysis", type="primary"):
                     target_pct = sheet_target; logic_msg = "⚠️ Economy is weak. Falling back to system defaults."
                     
             elif strategy_mode == "Wealth Shield (Defensive)":
-                if "Euphoric" in sentiment:
+                if "Euphoric" in str(sentiment):
                     target_pct = 0.10; logic_msg = "🛡️ Sentiment is Euphoric. Hard cap at 10% Equity."
                 else:
                     target_pct = min(sheet_target, 0.35); logic_msg = "🛡️ Capping Equity at 35% maximum."
@@ -379,16 +385,16 @@ if st.button("Run Full Analysis", type="primary"):
                 target_pct = sheet_target; logic_msg = "✅ Following Sheet Cycle Logic exactly."
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Macro Regime", regime)
+            m1.metric("Regime Change (Main)", regime_change, help="Key Indicator from Cell C23")
             m2.metric("Macro Score", f"{score}")
-            m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in sentiment else "normal")
+            m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
             m4.metric("Target Equity %", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
             
             st.info(f"**Strategy Logic:** {logic_msg}")
             st.progress(target_pct, text=f"Target Allocation: {target_pct*100:.0f}%")
 
         except Exception as e:
-            st.warning(f"Sync Error: Ensure Dashboard C3, C5, C11, C16 are populated. ({e})")
+            st.warning(f"Sync Error: Ensure Dashboard C3, C5, C11, C16, C23 are populated. ({e})")
             
     st.markdown("---")
 
