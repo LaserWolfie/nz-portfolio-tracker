@@ -363,7 +363,6 @@ if st.button("Run Full Analysis", type="primary"):
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
-            # TIGHTENED SCALES FOR VIBRANCY
             .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-3, vmax=3)
             .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
             .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
@@ -371,10 +370,14 @@ if st.button("Run Full Analysis", type="primary"):
             use_container_width=True, height=600
         )
         
-        # CHART
+        # CHARTS (Side by Side)
         st.markdown("---")
-        c_pie, c_blank = st.columns([1, 2])
-        with c_pie:
+        st.subheader("📊 Portfolio Composition")
+        c_sector, c_stock = st.columns(2)
+        
+        # Chart 1: Sector
+        with c_sector:
+            st.caption("Breakdown by Sector")
             if 'Sector' in portfolio.columns:
                 sector_group = portfolio.groupby('Sector')['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
@@ -383,6 +386,25 @@ if st.button("Run Full Analysis", type="primary"):
                 ax.pie(sector_group, labels=sector_group.index, autopct='%1.0f%%', pctdistance=0.8, startangle=90, colors=colors, textprops={'color':"white"})
                 fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig)
+
+        # Chart 2: Stock (Holdings)
+        with c_stock:
+            st.caption("Breakdown by Company")
+            if 'Ticker' in portfolio.columns:
+                # Group by Ticker just in case of duplicates, though usually unique
+                stock_group = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False)
+                fig2, ax2 = plt.subplots(figsize=(5, 5))
+                fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
+                # Use a different colormap for variety
+                colors2 = plt.cm.tab20c(np.linspace(0, 1, len(stock_group)))
+                
+                # Only label slices > 2% to avoid clutter, else empty string
+                total_val = stock_group.sum()
+                labels = [idx if (val/total_val > 0.02) else '' for idx, val in zip(stock_group.index, stock_group)]
+                
+                ax2.pie(stock_group, labels=labels, autopct=lambda p: f'{p:.0f}%' if p > 2 else '', pctdistance=0.8, startangle=90, colors=colors2, textprops={'color':"white"})
+                fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
+                st.pyplot(fig2)
 
     with tab2:
         try:
