@@ -31,7 +31,6 @@ try:
     spreadsheet = client.open(SHEET_NAME)
     sheet = spreadsheet.worksheet("Share Portfolio")
     
-    # Try to connect to History tab
     try:
         history_sheet = spreadsheet.worksheet(HISTORY_TAB_NAME)
     except:
@@ -44,24 +43,54 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    required_cols = ['Ticker', 'Shares', 'Purchase Price', 'Sector']
-    
+    # 1. Validate Basic Columns
+    required_cols = ['Ticker', 'Shares', 'Purchase Price']
     for col in required_cols:
         if col not in df.columns:
-            if col == 'Sector':
-                st.warning("⚠️ 'Sector' column missing. Charts will have no data.")
-                df['Sector'] = "Unknown"
-            else:
-                st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
-                st.stop()
-            
-    portfolio = df[required_cols].copy()
+            st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
+            st.stop()
+    
+    # 2. Validate/Create "Memory" Columns (Matches your screenshot)
+    # Mapping: Code Name -> Your Sheet Header Name
+    col_map = {
+        'Market Cap': 'Market Cap',
+        'Analyst Target': 'Analyst Target',
+        'P/E Ratio': 'P/E',          # <--- Adjusted to match your "P/E" column
+        '52W High': '52W High',
+        '52W Low': '52W Low',
+        'Sector': 'Sector'
+    }
+
+    # Ensure these exist in the DataFrame (even if empty) so code doesn't break
+    for internal_name, sheet_header in col_map.items():
+        if sheet_header not in df.columns:
+            # If your sheet is missing "Analyst Target", we create a placeholder in memory
+            df[sheet_header] = "" 
+
+    portfolio = df.copy()
     portfolio = portfolio[portfolio['Ticker'] != '']
     
+    # --- ROBUST CLEANING FUNCTIONS ---
     def clean_currency(x):
         if isinstance(x, str):
             return x.replace('$', '').replace(',', '').strip()
         return x
+
+    def clean_financial_text(x):
+        """Cleans values like '$7,754 M' or '38 x' into pure numbers"""
+        if isinstance(x, (int, float)): return x
+        if not isinstance(x, str): return float('nan')
+        # Remove M (millions), B (billions), x (times), $ (currency), , (commas)
+        s = x.upper().replace(',', '').replace('$', '').replace('M', '').replace('B', '').replace('X', '').strip()
+        if s == '' or s == '-': return float('nan')
+        try:
+            val = float(s)
+            # Heuristic: If value is small (e.g. 7754) but header is Market Cap, 
+            # it probably meant Millions. However, for safety, we treat as raw first.
+            # Yahoo will overwrite this with the full number (7754000000) soon anyway.
+            return val
+        except:
+            return float('nan')
 
     portfolio['Shares'] = pd.to_numeric(portfolio['Shares'].apply(clean_currency), errors='coerce')
     portfolio['Purchase Price'] = pd.to_numeric(portfolio['Purchase Price'].apply(clean_currency), errors='coerce')
@@ -79,7 +108,6 @@ try:
 
     st.sidebar.success("✅ Sync Successful!")
     
-    # Sidebar Chart
     try:
         hist_data = history_sheet.get_all_values()
         if len(hist_data) > 1:
@@ -107,34 +135,23 @@ if st.button("Run Full Analysis", type="primary"):
     with st.spinner('Fetching Benchmark...'):
         try:
             market_data = yf.download(BENCHMARK_TICKER, period="1y", progress=False)
-            # Handle slight format variations in yfinance
-            if 'Close' in market_data.columns:
-                market_hist_data = market_data['Close']
-            else:
-                market_hist_data = market_data
-                
-            if isinstance(market_hist_data, pd.DataFrame): 
-                market_hist_data = market_hist_data.iloc[:, 0]
-
+            if 'Close' in market_data.columns: market_hist_data = market_data['Close']
+            else: market_hist_data = market_data
+            if isinstance(market_hist_data, pd.DataFrame): market_hist_data = market_hist_data.iloc[:, 0]
             if len(market_hist_data) >= 2:
                 market_now = float(market_hist_data.iloc[-1])
                 market_prev = float(market_hist_data.iloc[-2])
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: BULK PRICE HISTORY (The "Bulletproof" Layer) ---
-    # We download 1 year of data for ALL stocks at once.
-    # This guarantees we have Price, 52W High, and 52W Low without asking .info
-    
-    with st.spinner('Fetching history & calculating stats...'):
+    # --- STEP 2: BULK PRICE HISTORY ---
+    with st.spinner('Fetching prices...'):
         try:
-            # group_by='ticker' ensures we get a nice structure even for 1 stock
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
             
             curr_prices, prev_prices, p30_prices, p1y_prices = [], [], [], []
-            betas, lows_52w, highs_52w = [], [], []
+            betas = []
             
-            # Prepare Market Returns for Beta
             if market_hist_data is not None:
                 market_returns = market_hist_data.pct_change().dropna()
             else:
@@ -142,147 +159,145 @@ if st.button("Run Full Analysis", type="primary"):
 
             for t in ticker_list:
                 try:
-                    # Extract DataFrame for this specific ticker
-                    if len(ticker_list) == 1:
-                        df_t = bulk_data # If only 1 stock, structure is different
-                    else:
-                        df_t = bulk_data[t]
+                    if len(ticker_list) == 1: df_t = bulk_data
+                    else: df_t = bulk_data[t]
                     
-                    # Clean Empty Rows
                     df_t = df_t.dropna(how='all')
                     
                     if not df_t.empty and 'Close' in df_t.columns:
                         closes = df_t['Close']
-                        
-                        # 1. Price Snapshots
                         curr = float(closes.iloc[-1])
                         prev = float(closes.iloc[-2]) if len(closes) >= 2 else curr
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
-                        # 2. GUARANTEED 52-Week High/Low (Calculated from history)
-                        # We use the 'Low' and 'High' columns from the last year
-                        lo = float(df_t['Low'].min())
-                        hi = float(df_t['High'].max())
-                        
-                        # 3. Beta Calculation
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
-                            # Align dates
                             aligned = pd.concat([stock_ret, market_returns], axis=1).dropna()
                             if len(aligned) > 10:
                                 cov = aligned.cov().iloc[0, 1]
                                 var = aligned.iloc[:, 1].var()
                                 if var != 0: beta_val = cov / var
 
-                        curr_prices.append(curr)
-                        prev_prices.append(prev)
-                        p30_prices.append(p30)
-                        p1y_prices.append(p1y)
+                        curr_prices.append(curr); prev_prices.append(prev)
+                        p30_prices.append(p30); p1y_prices.append(p1y)
                         betas.append(beta_val)
-                        lows_52w.append(lo)
-                        highs_52w.append(hi)
                     else:
-                        # Fallback if data missing
                         raise ValueError("No data")
                 except:
-                    # Default safe values
                     curr_prices.append(0.0); prev_prices.append(0.0)
-                    p30_prices.append(0.0); p1y_prices.append(0.0)
-                    betas.append(1.0)
-                    lows_52w.append(0.0); highs_52w.append(0.0)
+                    p30_prices.append(0.0); p1y_prices.append(0.0); betas.append(1.0)
 
             portfolio['Current Price'] = curr_prices
             portfolio['Previous Price'] = prev_prices
             portfolio['Price 30d'] = p30_prices
             portfolio['Price 1y'] = p1y_prices
             portfolio['Beta'] = betas
-            portfolio['52W Low'] = lows_52w
-            portfolio['52W High'] = highs_52w
             
         except Exception as e:
-            st.error(f"Critical Data Error: {e}")
-            st.stop()
+            st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (The "Soft" Layer) ---
-    # We fetch Market Cap, P/E, Targets here. If they fail, we show "-", 
-    # but we DO NOT lose the price/chart data from Step 2.
-    
+    # --- STEP 3: FUNDAMENTALS (SMART PERSISTENCE) ---
     progress = st.progress(0); status = st.empty()
-    pe_ratios, div_yields, market_caps, analyst_upsides = [], [], [], []
     
-    if 'Sector' in portfolio.columns:
-        sectors = portfolio['Sector'].fillna("Unknown").tolist()
-    else:
-        sectors = ["Unknown"] * len(ticker_list)
+    final_pe, final_div, final_mcap, final_upside = [], [], [], []
+    final_52_lo, final_52_hi = [], []
+    
+    # Identify Header Names from Map
+    h_mcap = col_map['Market Cap']
+    h_target = col_map['Analyst Target']
+    h_pe = col_map['P/E Ratio']
+    h_52h = col_map['52W High']
+    h_52l = col_map['52W Low']
 
-    for i, t in enumerate(ticker_list):
-        status.text(f"Getting details for {t}...")
-        progress.progress((i+1)/len(ticker_list))
+    for i, row in portfolio.iterrows():
+        t = row['Yahoo_Ticker']
+        status.text(f"Analyzing {t}...")
+        progress.progress((i+1)/len(portfolio))
         
-        # Default "Missing" Values
-        pe = float('nan')
-        div_pct = 0.0
-        mcap = float('nan')
-        upside = float('nan')
-        
+        # 1. READ EXISTING DATA (Clean it first)
+        curr_mcap = clean_financial_text(row.get(h_mcap))
+        curr_target = clean_financial_text(row.get(h_target))
+        curr_pe = clean_financial_text(row.get(h_pe))
+        curr_52h = clean_financial_text(row.get(h_52h))
+        curr_52l = clean_financial_text(row.get(h_52l))
+        curr_div_pct = 0.0
+
+        # 2. FETCH NEW DATA
+        fetched_data = False
         try:
             stock = yf.Ticker(t)
             
-            # A. Try FAST INFO first (Market Cap) - Fast & Reliable
+            # A. Fast Info
             try:
                 if hasattr(stock, 'fast_info'):
-                    if stock.fast_info.market_cap:
-                        mcap = stock.fast_info.market_cap
+                    if stock.fast_info.market_cap: 
+                        curr_mcap = stock.fast_info.market_cap; fetched_data = True
+                    if stock.fast_info.year_high: 
+                        curr_52h = stock.fast_info.year_high; fetched_data = True
+                    if stock.fast_info.year_low: 
+                        curr_52l = stock.fast_info.year_low; fetched_data = True
             except: pass
 
-            # B. Try DEEP INFO (P/E, Div, Target) - Slower, might fail
+            # B. Deep Info
             try:
                 info = stock.info
+                if info.get('trailingPE'): 
+                    curr_pe = info['trailingPE']; fetched_data = True
+                if info.get('targetMeanPrice'): 
+                    curr_target = info['targetMeanPrice']; fetched_data = True
                 
-                # P/E Ratio
-                pe = info.get('trailingPE')
-                if pe is None: 
-                    # Backup P/E Calc
-                    try:
-                        eps = info.get('trailingEps')
-                        price_now = portfolio.loc[i, 'Current Price'] # Use our known price
-                        if eps and price_now and eps > 0: pe = price_now / eps
-                    except: pass
-                
-                # Dividend
-                div = info.get('dividendYield')
-                if div is None: div = info.get('trailingAnnualDividendYield')
-                if div is not None: 
-                    div_pct = div * 100 if (div > 0 and div < 0.30) else div
-                    
-                # Analyst Target
-                target = info.get('targetMeanPrice')
-                price_now = portfolio.loc[i, 'Current Price'] # Use our known price
-                
-                if target and price_now and price_now > 0:
-                    upside = ((target - price_now) / price_now) * 100
-
-            except: pass # If info fails, we stick to defaults
+                div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
+                if div: curr_div_pct = div * 100
+            except: pass
             
-            # Slow down slightly to be polite to Yahoo
             time.sleep(0.1)
-            
         except: pass
 
-        pe_ratios.append(pe)
-        div_yields.append(div_pct)
-        market_caps.append(mcap)
-        analyst_upsides.append(upside)
+        # 3. SAVE TO SHEET (Update row by row if we found fresh data)
+        # Note: We use i+2 because Row 1 is headers
+        if fetched_data:
+            try:
+                # Update Market Cap
+                if not pd.isna(curr_mcap) and h_mcap in df.columns:
+                    sheet.update_cell(i+2, df.columns.get_loc(h_mcap)+1, curr_mcap)
+                # Update Target
+                if not pd.isna(curr_target) and h_target in df.columns:
+                    sheet.update_cell(i+2, df.columns.get_loc(h_target)+1, curr_target)
+                # Update P/E
+                if not pd.isna(curr_pe) and h_pe in df.columns:
+                    sheet.update_cell(i+2, df.columns.get_loc(h_pe)+1, curr_pe)
+                # Update 52W
+                if not pd.isna(curr_52h) and h_52h in df.columns:
+                    sheet.update_cell(i+2, df.columns.get_loc(h_52h)+1, curr_52h)
+                if not pd.isna(curr_52l) and h_52l in df.columns:
+                    sheet.update_cell(i+2, df.columns.get_loc(h_52l)+1, curr_52l)
+            except: pass
+
+        # 4. STORE FOR DISPLAY
+        final_pe.append(curr_pe)
+        final_div.append(curr_div_pct)
+        final_mcap.append(curr_mcap)
+        final_52_hi.append(curr_52h)
+        final_52_lo.append(curr_52l)
+        
+        # Calc Upside
+        price_now = portfolio.loc[i, 'Current Price']
+        if not pd.isna(curr_target) and price_now > 0:
+            upside_val = ((curr_target - price_now) / price_now) * 100
+        else:
+            upside_val = float('nan')
+        final_upside.append(upside_val)
 
     status.empty(); progress.empty()
     
-    portfolio['P/E Ratio'] = pe_ratios
-    portfolio['Div Yield %'] = div_yields
-    portfolio['Sector'] = sectors
-    portfolio['Market Cap'] = market_caps
-    portfolio['Analyst Upside'] = analyst_upsides
+    portfolio['P/E Ratio'] = final_pe
+    portfolio['Div Yield %'] = final_div
+    portfolio['Market Cap'] = final_mcap
+    portfolio['Analyst Upside'] = final_upside
+    portfolio['52W Low'] = final_52_lo
+    portfolio['52W High'] = final_52_hi
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -321,7 +336,7 @@ if st.button("Run Full Analysis", type="primary"):
         st.toast(f"✅ Saved today's value: ${total_value:,.2f}")
     else: st.toast("ℹ️ History already up to date.")
 
-    # --- DISPLAY METRICS ---
+    # --- UI LAYOUT ---
     st.subheader("📊 Portfolio Health")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Portfolio Value", f"${total_value:,.2f}")
@@ -342,12 +357,12 @@ if st.button("Run Full Analysis", type="primary"):
     b4.metric("Strategy", risk_label)
     st.caption(f"Risk Assessment: {risk_msg}")
 
-    # --- CHARTS & TABLE ---
+    # Tabs
     st.markdown("---")
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # 1. TABLE SECTION
+        # Table
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
         
@@ -368,10 +383,9 @@ if st.button("Run Full Analysis", type="primary"):
             use_container_width=True, height=600
         )
 
-        # 2. CHART SECTION
+        # Charts
         st.markdown("---")
         st.subheader("📊 Portfolio Composition")
-        
         chart_c1, chart_c2 = st.columns([1, 2])
         
         with chart_c1:
