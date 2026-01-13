@@ -47,17 +47,15 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # FIX: We now look for 'Sector' too
+    # FIX: We look for 'Sector' too so it doesn't get dropped
     required_cols = ['Ticker', 'Shares', 'Purchase Price', 'Sector']
     
     for col in required_cols:
         if col not in df.columns:
             if col == 'Sector':
-                # If Sector is missing, warn but allow app to run
                 st.warning("⚠️ 'Sector' column missing. Charts will have no data.")
                 df['Sector'] = "Unknown"
             else:
-                # If critical columns missing, stop
                 st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
                 st.stop()
             
@@ -73,8 +71,7 @@ try:
     portfolio['Purchase Price'] = pd.to_numeric(portfolio['Purchase Price'].apply(clean_currency), errors='coerce')
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
 
-    # --- CRITICAL STEP: CREATE YAHOO TICKER ---
-    # This was the missing part causing your error!
+    # --- TICKER FIXER ---
     def fix_ticker(ticker):
         ticker = str(ticker).strip().upper()
         if ":" in ticker:
@@ -97,7 +94,7 @@ try:
             st.sidebar.subheader("📈 Wealth Trend")
             st.sidebar.line_chart(hist_df.set_index('Date')['Value'])
     except:
-        pass # Ignore history errors for now
+        pass 
 
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
@@ -201,14 +198,18 @@ if st.button("Run Full Analysis", type="primary"):
             div = info.get('dividendYield', 0)
             if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
+            
+            # CRITICAL FIX: Use float('nan') instead of None to prevent formatting crash
+            if pe is None: pe = float('nan')
+            
             pe_ratios.append(pe); div_yields.append(div_pct)
         except:
-            pe_ratios.append(None); div_yields.append(0)
+            pe_ratios.append(float('nan')); div_yields.append(0)
             
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
     portfolio['Div Yield %'] = div_yields
-    portfolio['Sector'] = sectors # <--- USES GOOGLE SHEET DATA
+    portfolio['Sector'] = sectors
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -280,38 +281,27 @@ if st.button("Run Full Analysis", type="primary"):
     with tab1:
         col_table, col_pie = st.columns([2.5, 1])
         with col_table:
-            # FIX: Added 'P/E Ratio' and 'Div Yield %' back to this list
-            display_df = portfolio[[
-                'Ticker', 'Sector', 'Current Price', 'P/E Ratio', 
-                'Div Yield %', 'Beta', 'Day Change %', '30D %', 
-                '1Y %', 'Total Gain %', 'Market Value'
-            ]].copy()
-            
+            # We explicitly select columns for display
+            display_df = portfolio[['Ticker', 'Sector', 'Current Price', 'Beta', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
             display_df = display_df.sort_values(by='Total Gain %', ascending=False)
             
             st.dataframe(
                 display_df.style.format({
-                    "Current Price": "${:.2f}", 
-                    "Market Value": "${:,.0f}",
-                    "Day Change %": "{:+.2f}%", 
-                    "30D %": "{:+.2f}%", 
-                    "1Y %": "{:+.2f}%", 
-                    "Total Gain %": "{:+.2f}%", 
-                    "Beta": "{:.2f}",
-                    "Div Yield %": "{:.2f}%",
+                    "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
+                    "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
+                    "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
+                    "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
                     "P/E Ratio": "{:.1f}"
                 })
                 .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
                 .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
                 .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
                 .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
-                .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
-                .background_gradient(subset=['Beta'], cmap="coolwarm", vmin=0.5, vmax=1.5),
+                .background_gradient(subset=['Beta'], cmap="coolwarm", vmin=0.5, vmax=1.5)
+                .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
                 use_container_width=True, height=600
             )
-            
         with col_pie:
-            # SAFETY CHECK: Only draw pie chart if we have valid sectors
             if 'Sector' in portfolio.columns and not portfolio['Sector'].isnull().all():
                 sector_group = portfolio.groupby('Sector')['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
