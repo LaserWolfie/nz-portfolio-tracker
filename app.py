@@ -6,7 +6,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
-import time # <--- Added for safety delay
+import time
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
@@ -169,41 +169,49 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (SLOW & STEADY) ---
+    # --- STEP 3: FUNDAMENTALS (ROBUST MODE) ---
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields = [], []
     
-    # Read Sectors from Google Sheet (Fast)
+    # Read Sectors from Google Sheet
     if 'Sector' in portfolio.columns:
         sectors = portfolio['Sector'].fillna("Unknown").tolist()
     else:
         sectors = ["Unknown"] * len(ticker_list)
 
-    # Fetch P/E & Yield from Yahoo (With Delay)
+    # Fetch P/E & Yield
     for i, t in enumerate(ticker_list):
         status.text(f"Analyzing {t} (Please wait)...")
         progress.progress((i+1)/len(ticker_list))
         
         try:
             stock = yf.Ticker(t)
-            # Use .fast_info if possible, fallback to .info
-            # Note: .info is slower but contains PE/Div
             info = stock.info 
             
             pe = info.get('trailingPE', None)
-            div = info.get('dividendYield', 0)
             
-            if div is None: div = 0
+            # --- IMPROVED DIVIDEND CHECK ---
+            # 1. Try standard 'dividendYield'
+            div = info.get('dividendYield', None)
+            
+            # 2. If missing, try 'trailingAnnualDividendYield' (Backup)
+            if div is None:
+                div = info.get('trailingAnnualDividendYield', None)
+            
+            # 3. If still missing, assume 0
+            if div is None: 
+                div = 0
+            
+            # 4. Handle Decimal vs Percent
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
             
-            # Convert None to NaN so it doesn't crash formatting
             if pe is None: pe = float('nan')
             
             pe_ratios.append(pe)
             div_yields.append(div_pct)
             
-            # SAFETY DELAY: 0.25 seconds between calls to prevent blocking
-            time.sleep(0.25) 
+            # SAFETY DELAY
+            time.sleep(0.3) 
             
         except:
             pe_ratios.append(float('nan'))
@@ -289,7 +297,7 @@ if st.button("Run Full Analysis", type="primary"):
                     "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
                     "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
                     "P/E Ratio": "{:.1f}"
-                }, na_rep="-")  # <--- Shows "-" if data is missing
+                }, na_rep="-")
                 .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
                 .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
                 .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
