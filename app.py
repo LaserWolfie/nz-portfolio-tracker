@@ -17,11 +17,9 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Signal:** Combines "Regime Change" (C23) and "Current Regime" (C3).
-    * **Strategy Toggles:**
-        * *Cycle Purist:* Adheres strictly to the sheet's Equity Target.
-        * *Momentum Chaser:* Overrides "Euphoria" if the Macro Score is positive.
-        * *Wealth Shield:* Caps equity to protect capital during "Euphoria".
+    * **Regime Signal (C23):** "Risk-On / Early Expansion"
+    * **Current Regime (C2):** The broader economic state (e.g., "Expansion").
+    * **Sentiment (C12):** "Euphoric" vs "Benign".
     
     **2. The "Hybrid" Data Engine:**
     * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
@@ -64,10 +62,10 @@ def fetch_data():
         macro_data = {}
         try:
             m_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet("Dashboard")
-            # Pulling exact cells based on your screenshot
-            macro_data['regime_c3'] = m_sheet.acell('C3').value  # "Expansion"
+            # EXACT CELL MAPPING
+            macro_data['regime_c2'] = m_sheet.acell('C2').value  # "Expansion"
             macro_data['score'] = m_sheet.acell('C5').value      # "4"
-            macro_data['sentiment'] = m_sheet.acell('C12').value # "Euphoric" (C12, not C11)
+            macro_data['sentiment'] = m_sheet.acell('C12').value # "Euphoric" (C12)
             macro_data['signal'] = m_sheet.acell('C23').value    # "Risk-On..."
             
             # Allocation
@@ -119,7 +117,7 @@ if df_raw is not None:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         
         # Extract & Clean
-        regime = macro_data.get('regime_c3', '-')
+        regime = macro_data.get('regime_c2', '-')
         signal = macro_data.get('signal', '-')
         score = float(macro_data['score']) if macro_data['score'] else 0.0
         sentiment = macro_data.get('sentiment', 'Unknown')
@@ -174,17 +172,16 @@ if df_raw is not None:
         )
         st.altair_chart((bars + text).properties(height=200), use_container_width=True)
         
-        # Policy Rate Chart
-        if macro_data['chart']:
+        # Policy Rate Chart (or Placeholder)
+        if macro_data.get('chart'):
             try:
                 c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
-                # Convert first column to date/index and others to numeric
                 c_df.set_index(c_df.columns[0], inplace=True)
                 for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
-                
                 with st.expander("📉 View Policy Rate Chart (US vs NZ)", expanded=False):
                     st.line_chart(c_df)
-            except: pass
+            except: 
+                st.warning("⚠️ Could not render chart from 'chart_data' tab.")
 
     st.markdown("---")
 
@@ -192,7 +189,6 @@ if df_raw is not None:
     portfolio = df_raw[df_raw['Ticker'] != ''].copy()
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     
-    # Map Columns
     col_map = {
         'Market Cap': next((c for c in portfolio.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in portfolio.columns if 'Target' in c), 'Analyst Target'),
@@ -201,10 +197,10 @@ if df_raw is not None:
         'Sector': next((c for c in portfolio.columns if 'Sector' in c), 'Sector')
     }
     
-    # Clean Inputs
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
-    portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
+    if col_map['Analyst Target'] in portfolio.columns:
+        portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price'])
 
     # LIVE FETCH
@@ -221,7 +217,6 @@ if df_raw is not None:
         
         for idx, row in portfolio.iterrows():
             t = row['Yahoo_Ticker']
-            # Prices
             try:
                 df_t = bulk_data[t] if len(ticker_list) > 1 else bulk_data
                 curr = float(df_t['Close'].iloc[-1])
@@ -235,13 +230,12 @@ if df_raw is not None:
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
             
-            # Fundamentals (Sheet priority for PE/Div)
+            # Hybrid Data
             sheet_pe = clean_number(row.get(col_map['P/E']))
             sheet_div = clean_number(row.get(col_map['Div Yield']))
             
-            # Fetch Yahoo if needed
             y_pe, y_div, y_cap = float('nan'), 0, 0
-            if pd.isna(sheet_pe) or force_fresh:
+            if pd.isna(sheet_pe):
                 try: 
                     info = yf.Ticker(t).info
                     y_pe = info.get('trailingPE', float('nan'))
@@ -253,11 +247,11 @@ if df_raw is not None:
             res['div'].append(y_div if y_div > 0 else sheet_div)
             res['cap'].append(y_cap)
             
-            tgt = row['Analyst Target']
+            tgt = row.get('Analyst Target', float('nan'))
             if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
             else: res['upside'].append(float('nan'))
 
-        # Assign Columns
+        # Assign
         portfolio['Current Price'] = res['curr']
         portfolio['Price 30d'] = res['p30']
         portfolio['Price 1y'] = res['p1y']
@@ -272,7 +266,7 @@ if df_raw is not None:
         portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
         portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
         portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
-        portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio.get('Previous Price', portfolio['Current Price'])) / portfolio['Current Price']) * 100 # Approx if no prev col
+        portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio.get('Previous Price', portfolio['Current Price'])) / portfolio['Current Price']) * 100
         portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
         portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
         portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
@@ -287,9 +281,9 @@ if df_raw is not None:
 
         # Table
         st.dataframe(
-            portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '30D %', '1Y %', 'Div Yield %', 'Vol Ratio', 'Total Gain %']].style.format({
-                "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Analyst Upside": "{:+.1f}%",
-                "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%", "Total Gain %": "{:+.1f}%", "Vol Ratio": "{:.1f}x"
+            portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', 'Market Value', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']].style.format({
+                "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", "Analyst Upside": "{:+.1f}%",
+                "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%", "Total Gain %": "{:+.1f}%"
             })
             .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
             .background_gradient(subset=['30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
@@ -297,7 +291,7 @@ if df_raw is not None:
             use_container_width=True, height=500
         )
 
-        # Charts (Restored and Fixed)
+        # Charts
         c1, c2 = st.columns(2)
         with c1:
             st.caption("Sector Allocation")
