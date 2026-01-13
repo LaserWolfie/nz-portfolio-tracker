@@ -131,11 +131,13 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: BULK PRICE HISTORY ---
-    with st.spinner('Fetching prices...'):
+    # --- STEP 2: BULK PRICE & VOLUME HISTORY ---
+    # We now fetch Volume data here too
+    with st.spinner('Fetching prices & volume...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
             curr_prices, prev_prices, p30_prices, p1y_prices = [], [], [], []
+            vol_ratios, daily_liquidities = [], []
             betas = []
             
             if market_hist_data is not None: market_returns = market_hist_data.pct_change().dropna()
@@ -149,11 +151,29 @@ if st.button("Run Full Analysis", type="primary"):
                     
                     if not df_t.empty and 'Close' in df_t.columns:
                         closes = df_t['Close']
+                        volumes = df_t['Volume'] if 'Volume' in df_t.columns else pd.Series([0]*len(closes))
+                        
+                        # Price Data
                         curr = float(closes.iloc[-1])
                         prev = float(closes.iloc[-2]) if len(closes) >= 2 else curr
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
+                        # Volume Data
+                        vol_today = float(volumes.iloc[-1])
+                        # Calculate 3-month (approx 65 trading days) average volume
+                        vol_avg = volumes.iloc[-65:].mean() if len(volumes) > 0 else 0
+                        
+                        # 1. Volume Ratio (Today / Avg)
+                        if vol_avg > 0:
+                            v_ratio = vol_today / vol_avg
+                        else:
+                            v_ratio = 0.0
+                            
+                        # 2. Daily Liquidity (Avg Volume * Price)
+                        liquidity = vol_avg * curr
+
+                        # Beta
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -166,16 +186,22 @@ if st.button("Run Full Analysis", type="primary"):
                         curr_prices.append(curr); prev_prices.append(prev)
                         p30_prices.append(p30); p1y_prices.append(p1y)
                         betas.append(beta_val)
+                        vol_ratios.append(v_ratio)
+                        daily_liquidities.append(liquidity)
+                        
                     else: raise ValueError("No data")
                 except:
                     curr_prices.append(0.0); prev_prices.append(0.0)
                     p30_prices.append(0.0); p1y_prices.append(0.0); betas.append(1.0)
+                    vol_ratios.append(0.0); daily_liquidities.append(0.0)
 
             portfolio['Current Price'] = curr_prices
             portfolio['Previous Price'] = prev_prices
             portfolio['Price 30d'] = p30_prices
             portfolio['Price 1y'] = p1y_prices
             portfolio['Beta'] = betas
+            portfolio['Vol Ratio'] = vol_ratios
+            portfolio['Daily Liquidity'] = daily_liquidities
             
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
@@ -208,7 +234,7 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # NO MORE TARGET SANITY CHECK (User Confirmed Data is Correct)
+        # NO TARGET SANITY CHECK (Trusting user data)
         price_now = portfolio.loc[i, 'Current Price']
 
         # 2. FETCH MISSING
@@ -315,44 +341,36 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Weight'] = portfolio['Market Value'] / total_value
     portfolio_beta = (portfolio['Weight'] * portfolio['Beta']).sum() if total_value > 0 else 1.0
 
+    if portfolio_beta > 1.15: risk_label = "Aggressive 🚀"; risk_msg = "Growth focus."
+    elif portfolio_beta < 0.85: risk_label = "Defensive 🛡️"; risk_msg = "Preservation focus."
+    else: risk_label = "Balanced ⚖️"; risk_msg = "Market tracking."
+
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_history = history_sheet.get_all_values()
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- KEY INSIGHTS SECTION (NEW) ---
+    # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("Click to view Analyst Opportunities & Market Context", expanded=True):
-        col_insight_1, col_insight_2 = st.columns(2)
-        
-        # 1. Analyst Opportunities
-        with col_insight_1:
-            st.markdown("##### 🚀 Top Analyst Picks (Based on your targets)")
-            # Filter for stocks with positive upside
-            opportunities = portfolio[portfolio['Analyst Upside'] > 0].sort_values(by='Analyst Upside', ascending=False).head(3)
-            if not opportunities.empty:
-                for idx, row in opportunities.iterrows():
-                    st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
+    with st.expander("View Opportunities & Volume Alerts", expanded=True):
+        c_insight1, c_insight2 = st.columns(2)
+        with c_insight1:
+            st.markdown("##### 🚀 Analyst Opportunities")
+            opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values(by='Analyst Upside', ascending=False).head(3)
+            if not opps.empty:
+                for _, r in opps.iterrows():
+                    st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside (Target: ${r['Target Price']:.2f})")
+            else: st.info("No major upside detected.")
+            
+        with c_insight2:
+            st.markdown("##### 🔊 Volume Alerts (Today)")
+            # Filter for stocks with Volume > 1.5x Average
+            vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
+            if not vol_spikes.empty:
+                for _, r in vol_spikes.iterrows():
+                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume (Action!)")
             else:
-                st.info("No stocks currently trading below analyst targets.")
-
-            st.markdown("##### ⚠️ Valuation Risks")
-            risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
-            if not risks.empty:
-                for idx, row in risks.iterrows():
-                    st.error(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Downside (Target: ${row['Target Price']:.2f})")
-            else:
-                st.success("No major valuation risks detected.")
-
-        # 2. Market Context (Manual/Static News - Updated Jan 2026)
-        with col_insight_2:
-            st.markdown("##### 📰 Recent Market Context")
-            st.info("""
-            * **Infratil (IFT):** Recently received an investment-grade BBB+ credit rating from S&P. First-half earnings showed solid operational EBITDAF growth (+7%).
-            * **EBOS Group (EBO):** Delivered a record full-year result with double-digit revenue growth, driven by its Healthcare segment.
-            * **Skellerup (SKL):** Achieved record EBIT of $78m, showing resilience in industrial markets despite agri-sector headwinds.
-            * **Sector Watch:** The NZ Healthcare sector (OCA, RYM) remains in focus as interest rate outlooks stabilize.
-            """)
+                st.info("No unusual volume spikes today.")
 
     st.markdown("---")
 
@@ -370,49 +388,48 @@ if st.button("Run Full Analysis", type="primary"):
     b1.metric("NZX 50 Today", f"{market_return_pct:+.2f}%")
     b2.metric("Alpha", f"{(day_gain_val/(total_value-day_gain_val)*100 - market_return_pct):+.2f}%")
     b3.metric("Beta", f"{portfolio_beta:.2f}")
-    if portfolio_beta > 1.15: risk_lbl = "Aggressive 🚀"
-    elif portfolio_beta < 0.85: risk_lbl = "Defensive 🛡️"
-    else: risk_lbl = "Balanced ⚖️"
-    b4.metric("Strategy", risk_lbl)
+    b4.metric("Strategy", risk_label)
 
     st.markdown("---")
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
         # TABLE PREP
-        display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
+        display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Vol Ratio', 'Daily Liquidity', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
         # CREATE CLICKABLE URLS
         display_df['URL'] = "https://finance.yahoo.com/quote/" + portfolio['Yahoo_Ticker']
         display_df['Ticker'] = display_df['URL']
         
         # HEATMAP FIX
-        for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
+        for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %', 'Vol Ratio']:
             display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
 
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
         
-        # CONFIGURE CLICKABLE COLUMN
         st.dataframe(
             display_df.style.format({
                 "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
                 "52W Low": "${:.2f}", "52W High": "${:.2f}", "Market Cap": "${:,.0f}",
                 "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
-                "Analyst Upside": "{:+.2f}%", "Div Yield %": "{:.2f}%", "P/E Ratio": "{:.1f}"
+                "Analyst Upside": "{:+.2f}%", "Div Yield %": "{:.2f}%", "P/E Ratio": "{:.1f}",
+                "Vol Ratio": "{:.1f}x", "Daily Liquidity": "${:,.0f}"
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
             .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-3, vmax=3)
             .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
             .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
-            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5), # Hot volume = Red
             column_config={
                 "Ticker": st.column_config.LinkColumn(
-                    "Ticker", 
-                    display_text=r"https://finance\.yahoo\.com/quote/(.*)"
+                    "Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"
                 ),
-                "URL": None
+                "URL": None,
+                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
+                "Daily Liquidity": st.column_config.NumberColumn("Liquidity (Day)", help="Avg Daily Volume x Price")
             },
             use_container_width=True, height=600
         )
@@ -446,7 +463,7 @@ if st.button("Run Full Analysis", type="primary"):
                 fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig2)
 
-        # BAR CHART
+        # BAR CHART - TOTAL RETURN
         st.markdown("---")
         st.subheader("🚀 Total Return by Stock")
         perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
