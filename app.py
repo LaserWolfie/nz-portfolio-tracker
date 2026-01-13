@@ -16,15 +16,16 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 How to Use This Dashboard"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Change (Cell C23):** Your primary cycle indicator (e.g., "Risk-On").
-    * **Strategy Toggles (Sidebar):**
-        * *Cycle Purist:* Strictly follows your spreadsheet's 15% Equity target.
-        * *Momentum Chaser:* Ignores "Euphoria" warnings if the Macro Score is positive (Target: 70%).
-        * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric) to protect capital.
+    * **Regime Signal (Cell C23):** Primary cycle indicator (e.g., "Risk-On / Early Expansion").
+    * **Strategy Toggles:**
+        * *Cycle Purist:* Follows your spreadsheet's 15% Equity target exactly.
+        * *Momentum Chaser:* Ignores "Euphoria" if Macro Score > 0 (Target: 70%).
+        * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric).
     
     **2. The "Hybrid" Data Engine:**
-    * **Analyst Targets:** Prioritizes the manual targets you enter in your Google Sheet (Column AB).
-    * **Liquidity:** Flags stocks trading <$50k/day as "Hard to Sell."
+    * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
+    * **Liquidity:** Flags stocks trading <$50k/day.
+    * **Volume:** Alerts if trading volume > 1.5x the 65-day average.
     """)
 
 # --- CONFIGURATION ---
@@ -116,7 +117,6 @@ try:
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     
-    # Ensure Analyst Target is read correctly
     if col_map['Analyst Target'] in portfolio.columns:
         portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     else:
@@ -206,7 +206,6 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
-                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -329,7 +328,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     status.empty(); progress.empty()
     
-    # --- CRITICAL ASSIGNMENT ---
+    # --- CRITICAL: ASSIGN COLUMNS NOW (PREVENTS KEYERROR) ---
     portfolio['P/E Ratio'] = final_pe
     portfolio['Div Yield %'] = final_div
     portfolio['Market Cap'] = final_mcap
@@ -372,23 +371,16 @@ if st.button("Run Full Analysis", type="primary"):
             sentiment = macro_sheet.acell('C11').value 
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
-            regime_change = macro_sheet.acell('C23').value
+            regime_change = macro_sheet.acell('C23').value # Primary Signal
 
-            if not regime or regime.strip() in ['-', '—', '']:
-                regime = "Regime Loading..."
+            if not regime or regime.strip() in ['-', '—', '']: regime = "Regime Loading..."
                 
-            # STRATEGY LOGIC
             if strategy_mode == "Momentum Chaser (Growth)":
-                if score > 0: 
-                    target_pct = 0.70; logic_msg = "🚀 Economy is Expanding. Ignoring Sentiment warnings."
-                else:
-                    target_pct = sheet_target; logic_msg = "⚠️ Economy is weak. Falling back to system defaults."
-                    
+                if score > 0: target_pct = 0.70; logic_msg = "🚀 Economy is Expanding. Ignoring Sentiment warnings."
+                else: target_pct = sheet_target; logic_msg = "⚠️ Economy is weak. Falling back to system defaults."
             elif strategy_mode == "Wealth Shield (Defensive)":
-                if "Euphoric" in str(sentiment):
-                    target_pct = 0.10; logic_msg = "🛡️ Sentiment is Euphoric. Hard cap at 10% Equity."
-                else:
-                    target_pct = min(sheet_target, 0.35); logic_msg = "🛡️ Capping Equity at 35% maximum."
+                if "Euphoric" in str(sentiment): target_pct = 0.10; logic_msg = "🛡️ Sentiment is Euphoric. Hard cap at 10% Equity."
+                else: target_pct = min(sheet_target, 0.35); logic_msg = "🛡️ Capping Equity at 35% maximum."
             else: # Cycle Purist
                 target_pct = sheet_target; logic_msg = "✅ Following Sheet Cycle Logic exactly."
 
@@ -444,6 +436,9 @@ if st.button("Run Full Analysis", type="primary"):
             if not low_liq.empty:
                 for _, r in low_liq.iterrows():
                     st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day). Hard to sell.")
+            
+            if vol_spikes.empty and low_liq.empty:
+                st.caption("✅ No volume or liquidity risks today.")
 
     st.markdown("---")
 
@@ -496,8 +491,8 @@ if st.button("Run Full Analysis", type="primary"):
         c_sector, c_stock = st.columns(2)
         with c_sector:
             st.caption("By Sector")
-            if 'Sector' in portfolio.columns:
-                sector_group = portfolio.groupby('Sector')['Market Value'].sum()
+            if col_map['Sector'] in portfolio.columns:
+                sector_group = portfolio.groupby(col_map['Sector'])['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
                 fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
                 colors = plt.cm.Paired(np.linspace(0, 1, len(sector_group)))
