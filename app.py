@@ -47,31 +47,57 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # FIX: Added 'Sector' to this list so it doesn't get dropped!
+    # FIX: We now look for 'Sector' too
     required_cols = ['Ticker', 'Shares', 'Purchase Price', 'Sector']
     
     for col in required_cols:
         if col not in df.columns:
-            # If Sector is missing, just warn but don't crash (optional safety)
             if col == 'Sector':
-                st.warning("⚠️ 'Sector' column not found in sheet. Pie chart will be empty.")
-                # Create empty sector column to prevent crash
+                # If Sector is missing, warn but allow app to run
+                st.warning("⚠️ 'Sector' column missing. Charts will have no data.")
                 df['Sector'] = "Unknown"
             else:
+                # If critical columns missing, stop
                 st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
                 st.stop()
             
     portfolio = df[required_cols].copy()
     portfolio = portfolio[portfolio['Ticker'] != '']
     
+    def clean_currency(x):
+        if isinstance(x, str):
+            return x.replace('$', '').replace(',', '').strip()
+        return x
+
+    portfolio['Shares'] = pd.to_numeric(portfolio['Shares'].apply(clean_currency), errors='coerce')
+    portfolio['Purchase Price'] = pd.to_numeric(portfolio['Purchase Price'].apply(clean_currency), errors='coerce')
+    portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
+
+    # --- CRITICAL STEP: CREATE YAHOO TICKER ---
+    # This was the missing part causing your error!
+    def fix_ticker(ticker):
+        ticker = str(ticker).strip().upper()
+        if ":" in ticker:
+            clean_code = ticker.split(":")[-1]
+            if "ASX" in ticker: return clean_code + ".AX"
+            else: return clean_code + ".NZ"
+        return ticker
+
+    portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
+
+    st.sidebar.success("✅ Sync Successful!")
+    
     # Sidebar Mini-Chart
-    hist_data = history_sheet.get_all_values()
-    if len(hist_data) > 1:
-        hist_df = pd.DataFrame(hist_data[1:], columns=hist_data[0])
-        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-        hist_df['Value'] = pd.to_numeric(hist_df['Value'])
-        st.sidebar.subheader("📈 Wealth Trend")
-        st.sidebar.line_chart(hist_df.set_index('Date')['Value'])
+    try:
+        hist_data = history_sheet.get_all_values()
+        if len(hist_data) > 1:
+            hist_df = pd.DataFrame(hist_data[1:], columns=hist_data[0])
+            hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+            hist_df['Value'] = pd.to_numeric(hist_df['Value'])
+            st.sidebar.subheader("📈 Wealth Trend")
+            st.sidebar.line_chart(hist_df.set_index('Date')['Value'])
+    except:
+        pass # Ignore history errors for now
 
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
@@ -159,25 +185,22 @@ if st.button("Run Full Analysis", type="primary"):
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields = [], []
     
-    # We now read 'Sector' directly from the DataFrame we loaded from Google Sheets
-    # Check if 'Sector' exists in the sheet, otherwise default to "Unknown"
+    # 1. READ SECTORS FROM SHEET (FAST)
     if 'Sector' in portfolio.columns:
-        sectors = portfolio['Sector'].tolist()
+        sectors = portfolio['Sector'].fillna("Unknown").tolist()
     else:
         sectors = ["Unknown"] * len(ticker_list)
-    
+
+    # 2. FETCH P/E & YIELD FROM YAHOO
     for i, t in enumerate(ticker_list):
         status.text(f"Analyzing fundamentals for: {t}")
         progress.progress((i+1)/len(ticker_list))
         try:
-            # We ONLY ask Yahoo for P/E and Yield now (saves time!)
             info = yf.Ticker(t).info
-            
             pe = info.get('trailingPE', None)
             div = info.get('dividendYield', 0)
             if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
-            
             pe_ratios.append(pe); div_yields.append(div_pct)
         except:
             pe_ratios.append(None); div_yields.append(0)
@@ -185,7 +208,7 @@ if st.button("Run Full Analysis", type="primary"):
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
     portfolio['Div Yield %'] = div_yields
-    portfolio['Sector'] = sectors # <--- Uses the column from Google Sheets
+    portfolio['Sector'] = sectors # <--- USES GOOGLE SHEET DATA
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -273,21 +296,28 @@ if st.button("Run Full Analysis", type="primary"):
                 use_container_width=True, height=600
             )
         with col_pie:
-            sector_group = portfolio.groupby('Sector')['Market Value'].sum()
-            fig, ax = plt.subplots(figsize=(5, 5))
-            fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-            colors = plt.cm.Paired(np.linspace(0, 1, len(sector_group)))
-            ax.pie(sector_group, labels=sector_group.index, autopct='%1.0f%%', pctdistance=0.8, startangle=90, colors=colors, textprops={'color':"white"})
-            fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
-            st.pyplot(fig)
+            # SAFETY CHECK: Only draw pie chart if we have valid sectors
+            if 'Sector' in portfolio.columns and not portfolio['Sector'].isnull().all():
+                sector_group = portfolio.groupby('Sector')['Market Value'].sum()
+                fig, ax = plt.subplots(figsize=(5, 5))
+                fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+                colors = plt.cm.Paired(np.linspace(0, 1, len(sector_group)))
+                ax.pie(sector_group, labels=sector_group.index, autopct='%1.0f%%', pctdistance=0.8, startangle=90, colors=colors, textprops={'color':"white"})
+                fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
+                st.pyplot(fig)
+            else:
+                st.warning("Pie Chart unavailable (No Sector data)")
 
     with tab2:
-        fresh_hist = history_sheet.get_all_values()
-        if len(fresh_hist) > 1:
-            h_df = pd.DataFrame(fresh_hist[1:], columns=fresh_hist[0])
-            h_df['Date'] = pd.to_datetime(h_df['Date'])
-            h_df['Value'] = pd.to_numeric(h_df['Value'])
-            st.subheader("Your Net Worth Journey")
-            st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
-        else:
-            st.info("Not enough history yet.")
+        try:
+            fresh_hist = history_sheet.get_all_values()
+            if len(fresh_hist) > 1:
+                h_df = pd.DataFrame(fresh_hist[1:], columns=fresh_hist[0])
+                h_df['Date'] = pd.to_datetime(h_df['Date'])
+                h_df['Value'] = pd.to_numeric(h_df['Value'])
+                st.subheader("Your Net Worth Journey")
+                st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
+            else:
+                st.info("Not enough history yet.")
+        except:
+             st.info("History data unreadable.")
