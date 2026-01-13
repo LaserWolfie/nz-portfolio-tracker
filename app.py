@@ -119,8 +119,7 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: PRICE HISTORY & BACKUP HIGH/LOW ---
-    # We will use this data to manually calculate 52W High/Low if Yahoo fails
+    # --- STEP 2: PRICE HISTORY ---
     price_history_cache = {} 
     
     with st.spinner('Fetching portfolio prices...'):
@@ -145,9 +144,7 @@ if st.button("Run Full Analysis", type="primary"):
                     else: 
                         s = pd.Series([])
 
-                    # Save for later backup calculation
-                    if len(s) > 0:
-                        price_history_cache[t] = s
+                    if len(s) > 0: price_history_cache[t] = s
 
                     curr = float(s.iloc[-1]) if len(s)>0 else 0.0
                     prev = float(s.iloc[-2]) if len(s)>=2 else curr
@@ -179,11 +176,11 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (ROBUST FALLBACKS) ---
+    # --- STEP 3: FUNDAMENTALS (MARKET CAP + UPSIDE) ---
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], []
+    market_caps, analyst_upsides = [], [] # <--- New Lists
     
-    # Read Sectors from Google Sheet
     if 'Sector' in portfolio.columns:
         sectors = portfolio['Sector'].fillna("Unknown").tolist()
     else:
@@ -197,7 +194,7 @@ if st.button("Run Full Analysis", type="primary"):
             stock = yf.Ticker(t)
             info = stock.info 
             
-            # --- P/E CHECK ---
+            # --- P/E ---
             pe = info.get('trailingPE', None)
             if pe is None:
                 try:
@@ -206,30 +203,38 @@ if st.button("Run Full Analysis", type="primary"):
                     if price and eps and eps > 0: pe = price / eps
                 except: pass
             
-            # --- DIVIDEND CHECK ---
+            # --- DIVIDEND ---
             div = info.get('dividendYield', None)
             if div is None: div = info.get('trailingAnnualDividendYield', None)
             if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
             
-            if pe is None: pe = float('nan')
-            
-            # --- 52 WEEK HIGH/LOW CHECK (3 LAYERS OF BACKUP) ---
+            # --- 52 WEEK HIGH/LOW ---
             lo = info.get('fiftyTwoWeekLow')
             hi = info.get('fiftyTwoWeekHigh')
-            
-            # Backup 1: Regular Market Day
             if lo is None: lo = info.get('regularMarketDayLow')
             if hi is None: hi = info.get('regularMarketDayHigh')
-            
-            # Backup 2: Calculate manually from the history we just downloaded
             if (lo is None or hi is None) and t in price_history_cache:
                 hist_series = price_history_cache[t]
                 if not hist_series.empty:
                     if lo is None: lo = float(hist_series.min())
                     if hi is None: hi = float(hist_series.max())
 
-            # Final Cleanup
+            # --- MARKET CAP ---
+            mcap = info.get('marketCap', float('nan'))
+
+            # --- ANALYST TARGET & UPSIDE ---
+            target = info.get('targetMeanPrice', None)
+            current_p = info.get('currentPrice', None)
+            if current_p is None: current_p = info.get('regularMarketPreviousClose', None)
+            
+            if target and current_p:
+                upside = ((target - current_p) / current_p) * 100
+            else:
+                upside = float('nan')
+
+            # Formatting safety
+            if pe is None: pe = float('nan')
             if lo is None: lo = float('nan')
             if hi is None: hi = float('nan')
             
@@ -237,6 +242,8 @@ if st.button("Run Full Analysis", type="primary"):
             div_yields.append(div_pct)
             lows_52w.append(lo)
             highs_52w.append(hi)
+            market_caps.append(mcap)       # <--- Add
+            analyst_upsides.append(upside) # <--- Add
             
             time.sleep(0.3) 
             
@@ -245,6 +252,8 @@ if st.button("Run Full Analysis", type="primary"):
             div_yields.append(0)
             lows_52w.append(float('nan'))
             highs_52w.append(float('nan'))
+            market_caps.append(float('nan'))
+            analyst_upsides.append(float('nan'))
             
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
@@ -252,6 +261,8 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Sector'] = sectors
     portfolio['52W Low'] = lows_52w 
     portfolio['52W High'] = highs_52w
+    portfolio['Market Cap'] = market_caps # <--- Save
+    portfolio['Analyst Upside'] = analyst_upsides # <--- Save
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -318,7 +329,7 @@ if st.button("Run Full Analysis", type="primary"):
     with tab1:
         col_table, col_pie = st.columns([2.5, 1])
         with col_table:
-            display_df = portfolio[['Ticker', 'Sector', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
+            display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
             display_df = display_df.sort_values(by='Total Gain %', ascending=False)
             
             st.dataframe(
@@ -328,12 +339,12 @@ if st.button("Run Full Analysis", type="primary"):
                     "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
                     "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
                     "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
-                    "P/E Ratio": "{:.1f}"
+                    "P/E Ratio": "{:.1f}", "Market Cap": "${:,.0f}",
+                    "Analyst Upside": "{:+.2f}%"
                 }, na_rep="-")
                 .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
                 .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
-                .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
-                .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
+                .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30) # Green if analysts predict growth
                 .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
                 use_container_width=True, height=600
             )
