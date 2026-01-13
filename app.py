@@ -176,7 +176,7 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS ---
+    # --- STEP 3: FUNDAMENTALS (FAST_INFO RECOVERY MODE) ---
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields, lows_52w, highs_52w = [], [], [], []
     market_caps, analyst_upsides = [], []
@@ -190,67 +190,72 @@ if st.button("Run Full Analysis", type="primary"):
         status.text(f"Analyzing {t} (Please wait)...")
         progress.progress((i+1)/len(ticker_list))
         
+        # Initialize Variables as NaN first
+        pe, div_pct, lo, hi, mcap, upside = float('nan'), 0.0, float('nan'), float('nan'), float('nan'), float('nan')
+        
         try:
             stock = yf.Ticker(t)
-            info = stock.info 
             
-            # P/E
-            pe = info.get('trailingPE', None)
-            if pe is None:
-                try:
-                    price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
-                    eps = info.get('trailingEps')
-                    if price and eps and eps > 0: pe = price / eps
-                except: pass
+            # --- 1. TRY "FAST INFO" FIRST (Reliable & Fast) ---
+            # This rarely gets blocked and has Price, Market Cap, High/Low
+            try:
+                fast = stock.fast_info
+                # We prioritize these values because they are usually live
+                if fast.market_cap: mcap = fast.market_cap
+                if fast.year_high: hi = fast.year_high
+                if fast.year_low: lo = fast.year_low
+            except:
+                pass # Continue if fast_info fails
+
+            # --- 2. TRY "DEEP INFO" (Slower, might get blocked) ---
+            # We only need this for P/E, Dividends, and Analyst Targets
+            try:
+                info = stock.info
+                
+                # P/E
+                pe = info.get('trailingPE')
+                if pe is None: # Manual Calc Backup
+                    try:
+                        price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
+                        eps = info.get('trailingEps')
+                        if price and eps and eps > 0: pe = price / eps
+                    except: pass
+                
+                # Dividend
+                div = info.get('dividendYield')
+                if div is None: div = info.get('trailingAnnualDividendYield')
+                if div is not None: 
+                    div_pct = div * 100 if (div > 0 and div < 0.30) else div
+
+                # Analyst Upside
+                target = info.get('targetMeanPrice')
+                current_p = info.get('currentPrice') or info.get('regularMarketPreviousClose')
+                if target and current_p:
+                    upside = ((target - current_p) / current_p) * 100
+                
+            except:
+                pass # Info fetch failed, but we likely kept the 'Fast Info' data
             
-            # DIVIDEND
-            div = info.get('dividendYield', None)
-            if div is None: div = info.get('trailingAnnualDividendYield', None)
-            if div is None: div = 0
-            div_pct = div * 100 if (div > 0 and div < 0.30) else div
-            
-            # HIGH/LOW
-            lo = info.get('fiftyTwoWeekLow')
-            hi = info.get('fiftyTwoWeekHigh')
-            if lo is None: lo = info.get('regularMarketDayLow')
-            if hi is None: hi = info.get('regularMarketDayHigh')
-            if (lo is None or hi is None) and t in price_history_cache:
+            # --- 3. FINAL SAFETY NET (Calculation from History) ---
+            # If High/Low is STILL missing, calculate it from the chart data we already downloaded
+            if (pd.isna(lo) or pd.isna(hi)) and t in price_history_cache:
                 hist_series = price_history_cache[t]
                 if not hist_series.empty:
-                    if lo is None: lo = float(hist_series.min())
-                    if hi is None: hi = float(hist_series.max())
+                    if pd.isna(lo): lo = float(hist_series.min())
+                    if pd.isna(hi): hi = float(hist_series.max())
+            
+            time.sleep(0.2) # Small breath
+            
+        except Exception as e:
+            pass # Keep defaults (NaN)
 
-            # MARKET CAP & UPSIDE
-            mcap = info.get('marketCap', float('nan'))
-            target = info.get('targetMeanPrice', None)
-            current_p = info.get('currentPrice', None)
-            if current_p is None: current_p = info.get('regularMarketPreviousClose', None)
-            
-            if target and current_p:
-                upside = ((target - current_p) / current_p) * 100
-            else:
-                upside = float('nan')
-
-            if pe is None: pe = float('nan')
-            if lo is None: lo = float('nan')
-            if hi is None: hi = float('nan')
-            
-            pe_ratios.append(pe)
-            div_yields.append(div_pct)
-            lows_52w.append(lo)
-            highs_52w.append(hi)
-            market_caps.append(mcap)
-            analyst_upsides.append(upside)
-            
-            time.sleep(0.3) 
-            
-        except:
-            pe_ratios.append(float('nan'))
-            div_yields.append(0)
-            lows_52w.append(float('nan'))
-            highs_52w.append(float('nan'))
-            market_caps.append(float('nan'))
-            analyst_upsides.append(float('nan'))
+        # Append Safe Values
+        pe_ratios.append(pe)
+        div_yields.append(div_pct)
+        lows_52w.append(lo)
+        highs_52w.append(hi)
+        market_caps.append(mcap)
+        analyst_upsides.append(upside)
             
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
@@ -324,7 +329,7 @@ if st.button("Run Full Analysis", type="primary"):
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # 1. TABLE SECTION (FULL WIDTH)
+        # 1. TABLE SECTION
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
         
@@ -345,12 +350,10 @@ if st.button("Run Full Analysis", type="primary"):
             use_container_width=True, height=600
         )
 
-        # 2. CHART SECTION (BELOW TABLE)
+        # 2. CHART SECTION
         st.markdown("---")
         st.subheader("📊 Portfolio Composition")
         
-        # We use columns to keep the pie chart sized reasonably
-        # Left column (Chart) | Right column (Empty for future charts)
         chart_c1, chart_c2 = st.columns([1, 2])
         
         with chart_c1:
