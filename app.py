@@ -21,9 +21,11 @@ BENCHMARK_TICKER = "^NZ50"
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
+    # 1. Try Streamlit Secrets (Cloud)
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    # 2. Try Local File (Laptop)
     else:
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         
@@ -43,13 +45,14 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
+    # Validate Columns
     required_cols = ['Ticker', 'Shares', 'Purchase Price']
     for col in required_cols:
         if col not in df.columns:
             st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
             st.stop()
             
-    # SMART COLUMN MAPPING (Finds columns even if names vary slightly)
+    # SMART MAPPING (Finds your columns automatically)
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -65,12 +68,15 @@ try:
 
     # --- CLEANING FUNCTIONS ---
     def clean_number(x):
-        if pd.isna(x) or x == '' or str(x).strip() == '-': return float('nan')
+        """Robust cleaner for Manual Entries"""
+        if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A']: return float('nan')
         if isinstance(x, (int, float)): return float(x)
+        
         s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
         multiplier = 1
         if 'M' in s: multiplier = 1_000_000; s = s.replace('M', '')
         elif 'B' in s: multiplier = 1_000_000_000; s = s.replace('B', '')
+        
         s = s.replace('X', '').replace('%', '')
         try: return float(s) * multiplier
         except: return float('nan')
@@ -107,6 +113,8 @@ except Exception as e:
     st.stop()
 
 # --- MAIN DASHBOARD ---
+force_fresh = st.checkbox("Force Fresh Data from Yahoo (May fail if blocked)", value=False)
+
 if st.button("Run Full Analysis", type="primary"):
     
     ticker_list = portfolio['Yahoo_Ticker'].tolist()
@@ -126,7 +134,7 @@ if st.button("Run Full Analysis", type="primary"):
                 market_return_pct = ((market_now - market_prev) / market_prev) * 100
         except: pass
 
-    # --- STEP 2: BULK PRICE HISTORY ---
+    # --- STEP 2: BULK PRICE HISTORY (Fast & Reliable) ---
     with st.spinner('Fetching prices...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -175,36 +183,38 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: ANALYST & FUNDAMENTALS (BATCH UPDATE MODE) ---
+    # --- STEP 3: HYBRID ANALYST FETCH (MANUAL PRIORITY) ---
     progress = st.progress(0); status = st.empty()
     
-    final_pe, final_div, final_mcap, final_upside = [], [], [], []
+    final_pe, final_div, final_mcap, final_upside, final_targets = [], [], [], [], []
     final_52_lo, final_52_hi = [], []
     
-    # We will collect ALL sheet updates in this list and save ONCE at the end
-    # Format: {'row': 2, 'col': 5, 'val': 123}
     pending_updates = []
 
     for i, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
-        status.text(f"Fetching Details: {t}...")
+        status.text(f"Analysing {t}...")
         progress.progress((i+1)/len(portfolio))
         
-        # 1. READ (Clean)
-        curr_mcap = clean_number(row.get(col_map['Market Cap']))
-        curr_target = clean_number(row.get(col_map['Analyst Target']))
-        curr_pe = clean_number(row.get(col_map['P/E']))
-        curr_div_pct = clean_number(row.get(col_map['Div Yield']))
-        curr_52h = clean_number(row.get(col_map['52W High']))
-        curr_52l = clean_number(row.get(col_map['52W Low']))
+        # 1. READ FROM SHEET (Manual Entry)
+        # If force_fresh is False (default), we TRUST your spreadsheet first.
+        if force_fresh:
+            curr_mcap = curr_target = curr_pe = curr_div_pct = curr_52h = curr_52l = float('nan')
+        else:
+            curr_mcap = clean_number(row.get(col_map['Market Cap']))
+            curr_target = clean_number(row.get(col_map['Analyst Target']))
+            curr_pe = clean_number(row.get(col_map['P/E']))
+            curr_div_pct = clean_number(row.get(col_map['Div Yield']))
+            curr_52h = clean_number(row.get(col_map['52W High']))
+            curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # Remove "Garbage" Targets (e.g. Income pasted in Target col)
-        # If Target > 5x Price, assume it's an error/income
+        # SANITY CHECK: If Sheet has "2000" for a "$2" stock, it's garbage. Ignore it.
         price_now = portfolio.loc[i, 'Current Price']
-        if not pd.isna(curr_target) and price_now > 0 and curr_target > (price_now * 5):
-            curr_target = float('nan') # Mark as missing so we fetch it
+        if not pd.isna(curr_target) and price_now > 0:
+            if curr_target > (price_now * 5): 
+                curr_target = float('nan') # Ignore bad sheet data
 
-        # 2. FETCH (Only if missing)
+        # 2. FETCH FROM YAHOO (Only if data is missing)
         fetch_needed = False
         if pd.isna(curr_target) or pd.isna(curr_pe) or pd.isna(curr_div_pct):
             fetch_needed = True
@@ -236,8 +246,11 @@ if st.button("Run Full Analysis", type="primary"):
                 try:
                     info = stock.info
                     
-                    # TARGET
+                    # TARGET - Check 3 places
                     tgt = info.get('targetMeanPrice')
+                    if not tgt: tgt = info.get('targetMedianPrice')
+                    if not tgt: tgt = info.get('targetHighPrice')
+                    
                     if tgt and pd.isna(curr_target):
                         curr_target = tgt
                         if col_map['Analyst Target'] in df.columns:
@@ -254,9 +267,10 @@ if st.button("Run Full Analysis", type="primary"):
                     div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
                     if div and pd.isna(curr_div_pct):
                         curr_div_pct = div * 100
-                        # (Optional) Update Div in sheet if you want persistence there too
+                        if col_map['Div Yield'] in df.columns:
+                             pending_updates.append((i+2, df.columns.get_loc(col_map['Div Yield'])+1, curr_div_pct))
                         
-                    time.sleep(0.1) # Be polite
+                    time.sleep(0.3)
                 except: pass
             except: pass
 
@@ -266,29 +280,23 @@ if st.button("Run Full Analysis", type="primary"):
         final_mcap.append(curr_mcap)
         final_52_hi.append(curr_52h)
         final_52_lo.append(curr_52l)
+        final_targets.append(curr_target)
         
-        # Upside Calc
+        # 4. UPSIDE CALCULATION (Hybrid)
         if not pd.isna(curr_target) and price_now > 0:
             upside_val = ((curr_target - price_now) / price_now) * 100
         else:
             upside_val = float('nan')
         final_upside.append(upside_val)
 
-    # --- BATCH SAVE TO SHEET ---
-    if pending_updates:
-        status.text(f"Saving {len(pending_updates)} new data points to Google Sheet...")
+    # --- BATCH SAVE ---
+    if pending_updates and not force_fresh:
+        status.text(f"Saving {len(pending_updates)} new data points to Sheet...")
         try:
-            # We group updates by column to be efficient, or just loop safely
-            # Since gspread update_cells is complex to prepare, we'll use cell updates but slow/safe
-            # Or better: update_cells with a list.
-            # For simplicity and robustness given your size (~20 rows), simple loop is fine IF we didn't crash before.
-            # But let's try to be smart.
-            
-            # We will just iterate and update. It might take 10 seconds but it guarantees saving.
             for row_idx, col_idx, val in pending_updates:
                 try:
                     sheet.update_cell(row_idx, col_idx, val)
-                    time.sleep(0.2) # Prevent rate limit
+                    time.sleep(0.2)
                 except: pass
         except: pass
 
@@ -300,6 +308,7 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Analyst Upside'] = final_upside
     portfolio['52W Low'] = final_52_lo
     portfolio['52W High'] = final_52_hi
+    portfolio['Target Price'] = final_targets
 
     # --- CALCULATIONS & METRICS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -352,12 +361,11 @@ if st.button("Run Full Analysis", type="primary"):
     b4.metric("Strategy", risk_label)
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["🔎 Holdings Table", "📈 Wealth History", "🛠️ Raw Data Inspector"])
+    tab1, tab2, tab3 = st.tabs(["🔎 Holdings Table", "📈 Wealth History", "🛠️ Data Inspector"])
     
     with tab1:
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
-        # Force numeric for heatmap
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
 
@@ -370,16 +378,12 @@ if st.button("Run Full Analysis", type="primary"):
                 "Analyst Upside": "{:+.2f}%", "Div Yield %": "{:.2f}%", "P/E Ratio": "{:.1f}"
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
-            .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
-            .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
-            .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=600
         )
         
         st.markdown("---")
-        st.subheader("📊 Portfolio Composition")
         c_pie, c_blank = st.columns([1, 2])
         with c_pie:
             if 'Sector' in portfolio.columns:
@@ -399,5 +403,5 @@ if st.button("Run Full Analysis", type="primary"):
         except: st.info("No history yet.")
 
     with tab3:
-        st.info("This table shows the raw values we found. If 'Analyst Upside' is missing here, it means Yahoo Finance does not have a rating for that stock.")
-        st.dataframe(portfolio[['Ticker', 'Analyst Upside', 'P/E Ratio', 'Market Cap']])
+        st.warning("If 'Target Price' is blank below, Yahoo has no data. SOLUTION: Type a target price into Column AB of your Google Sheet.")
+        st.dataframe(portfolio[['Ticker', 'Analyst Upside', 'Target Price', 'Current Price']])
