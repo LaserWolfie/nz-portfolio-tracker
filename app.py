@@ -169,7 +169,7 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS (ROBUST MODE) ---
+    # --- STEP 3: FUNDAMENTALS (ROBUST & SMART FALLBACKS) ---
     progress = st.progress(0); status = st.empty()
     pe_ratios, div_yields = [], []
     
@@ -179,7 +179,6 @@ if st.button("Run Full Analysis", type="primary"):
     else:
         sectors = ["Unknown"] * len(ticker_list)
 
-    # Fetch P/E & Yield
     for i, t in enumerate(ticker_list):
         status.text(f"Analyzing {t} (Please wait)...")
         progress.progress((i+1)/len(ticker_list))
@@ -188,29 +187,34 @@ if st.button("Run Full Analysis", type="primary"):
             stock = yf.Ticker(t)
             info = stock.info 
             
+            # --- SMART P/E CHECK ---
+            # 1. Try standard Trailing P/E
             pe = info.get('trailingPE', None)
             
-            # --- IMPROVED DIVIDEND CHECK ---
-            # 1. Try standard 'dividendYield'
-            div = info.get('dividendYield', None)
+            # 2. If missing, try Manual Calc (Price / Trailing EPS)
+            if pe is None:
+                try:
+                    price = info.get('currentPrice') or info.get('regularMarketPreviousClose')
+                    eps = info.get('trailingEps')
+                    if price and eps and eps > 0:
+                        pe = price / eps
+                except:
+                    pass
             
-            # 2. If missing, try 'trailingAnnualDividendYield' (Backup)
+            # --- SMART DIVIDEND CHECK ---
+            div = info.get('dividendYield', None)
             if div is None:
                 div = info.get('trailingAnnualDividendYield', None)
-            
-            # 3. If still missing, assume 0
             if div is None: 
                 div = 0
-            
-            # 4. Handle Decimal vs Percent
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
             
+            # Formatting safety
             if pe is None: pe = float('nan')
             
             pe_ratios.append(pe)
             div_yields.append(div_pct)
             
-            # SAFETY DELAY
             time.sleep(0.3) 
             
         except:
