@@ -157,7 +157,7 @@ if st.button("Run Full Analysis", type="primary"):
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
-                        # VOLUME
+                        # VOLUME CALCS
                         vol_today = float(volumes.iloc[-1])
                         vol_avg = volumes.iloc[-65:].mean() if len(volumes) > 0 else 0
                         
@@ -166,7 +166,7 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
-                        # BETA
+                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -344,7 +344,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("View Opportunities & Market Context", expanded=True):
+    with st.expander("View Opportunities, Market Context & Volume", expanded=True):
         col_insight_1, col_insight_2 = st.columns(2)
         
         with col_insight_1:
@@ -353,7 +353,7 @@ if st.button("Run Full Analysis", type="primary"):
             if not opps.empty:
                 for _, row in opps.iterrows():
                     st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
-            else: st.info("No major upside opportunities based on current targets.")
+            else: st.info("No major upside opportunities detected.")
 
             st.markdown("##### ⚠️ Valuation Risks")
             risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
@@ -365,12 +365,19 @@ if st.button("Run Full Analysis", type="primary"):
         with col_insight_2:
             st.markdown("##### 📰 Recent Market Context (Jan 2026)")
             st.info("""
-            * **Infratil (IFT):** Rated BBB+ Investment Grade (Dec '25). HY26 EBITDAF up 7%. Divesting RetireAustralia.
-            * **EBOS Group (EBO):** Underlying EBITDA up 7.5%. Growth driven by Southeast Asia & community pharmacy.
-            * **Skellerup (SKL):** FY26 Guidance upgraded (Oct '25) to NPAT $55-60m on strong dairy demand.
-            * **A2 Milk (ATM):** FY26 Revenue Guidance upgraded (Nov '25). Top-4 brand position in China.
-            * **Macro:** NZ inflation tracking firmer; OCR cuts less likely near-term. Dairy prices +6.3% in Jan '26 auction.
+            * **Infratil (IFT):** Rated BBB+ Investment Grade (Dec '25). HY26 EBITDAF up 7%.
+            * **EBOS Group (EBO):** Underlying EBITDA up 7.5%. Growth in Southeast Asia.
+            * **Skellerup (SKL):** FY26 Guidance upgraded (Oct '25) to NPAT $55-60m.
+            * **A2 Milk (ATM):** FY26 Revenue Guidance upgraded (Nov '25).
+            * **Macro:** NZ inflation tracking firmer; dairy prices +6.3% in Jan '26 auction.
             """)
+            
+            st.markdown("##### 🔊 Volume Alerts")
+            vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
+            if not vol_spikes.empty:
+                for _, r in vol_spikes.iterrows():
+                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume")
+            else: st.caption("No unusual volume today.")
 
     st.markdown("---")
 
