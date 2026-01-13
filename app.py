@@ -18,7 +18,7 @@ HISTORY_TAB_NAME = "History"
 BENCHMARK_TICKER = "^NZ50"
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
-# --- SIDEBAR STRATEGY TOGGLE (NEW) ---
+# --- SIDEBAR STRATEGY TOGGLE ---
 st.sidebar.header("🎛️ Strategy Engine")
 strategy_mode = st.sidebar.radio(
     "Select Strategy:",
@@ -48,7 +48,7 @@ try:
         st.error(f"⚠️ Could not find a tab named '{HISTORY_TAB_NAME}'. Please create it.")
         st.stop()
         
-    # 2. Connect to Macro Sheet (NEW)
+    # 2. Connect to Macro Sheet
     try:
         macro_spreadsheet = client.open_by_url(MACRO_SHEET_URL)
         macro_sheet = macro_spreadsheet.worksheet("Dashboard")
@@ -78,7 +78,7 @@ try:
         '52W High': next((c for c in df.columns if '52' in c and 'High' in c), '52W High'),
         '52W Low': next((c for c in df.columns if '52' in c and 'Low' in c), '52W Low'),
         'Insider': next((c for c in df.columns if 'Insider' in c), 'Insider Activity'),
-        'Sector': 'Sector'
+        'Sector': next((c for c in df.columns if 'Sector' in c), 'Sector')
     }
 
     portfolio = df.copy()
@@ -87,7 +87,7 @@ try:
     # --- CLEANING FUNCTIONS ---
     def clean_number(x):
         """Robust cleaner"""
-        if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A']: return float('nan')
+        if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A', '—']: return float('nan')
         if isinstance(x, (int, float)): return float(x)
         
         s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
@@ -101,6 +101,13 @@ try:
 
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
+    
+    # Ensure Analyst Target is read correctly
+    if col_map['Analyst Target'] in portfolio.columns:
+        portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
+    else:
+        portfolio['Analyst Target'] = float('nan')
+
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
 
     def fix_ticker(ticker):
@@ -177,7 +184,6 @@ if st.button("Run Full Analysis", type="primary"):
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
-                        # VOLUME CALCS
                         vol_today = float(volumes.iloc[-1])
                         vol_avg = volumes.iloc[-65:].mean() if len(volumes) > 0 else 0
                         
@@ -186,7 +192,6 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
-                        # BETA CALC
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -218,12 +223,10 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: HYBRID ANALYST FETCH (PRESERVED) ---
+    # --- STEP 3: HYBRID ANALYST FETCH ---
     progress = st.progress(0); status = st.empty()
-    
     final_pe, final_div, final_mcap, final_upside, final_targets = [], [], [], [], []
     final_52_lo, final_52_hi = [], []
-    
     pending_updates = []
 
     for i, row in portfolio.iterrows():
@@ -242,17 +245,12 @@ if st.button("Run Full Analysis", type="primary"):
             curr_52h = clean_number(row.get(col_map['52W High']))
             curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # DIVIDEND FIX
-        if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
-            curr_div_pct = curr_div_pct / 100
-
-        # NO TARGET SANITY CHECK (Trust User Data)
+        if not pd.isna(curr_div_pct) and curr_div_pct > 30: curr_div_pct = curr_div_pct / 100
         price_now = portfolio.loc[i, 'Current Price']
 
         # 2. FETCH MISSING
         fetch_needed = False
-        if pd.isna(curr_target) or pd.isna(curr_pe) or pd.isna(curr_div_pct):
-            fetch_needed = True
+        if pd.isna(curr_target) or pd.isna(curr_pe) or pd.isna(curr_div_pct): fetch_needed = True
 
         if fetch_needed:
             try:
@@ -297,12 +295,8 @@ if st.button("Run Full Analysis", type="primary"):
             except: pass
 
         # 3. Store
-        final_pe.append(curr_pe)
-        final_div.append(curr_div_pct)
-        final_mcap.append(curr_mcap)
-        final_52_hi.append(curr_52h)
-        final_52_lo.append(curr_52l)
-        final_targets.append(curr_target)
+        final_pe.append(curr_pe); final_div.append(curr_div_pct); final_mcap.append(curr_mcap)
+        final_52_hi.append(curr_52h); final_52_lo.append(curr_52l); final_targets.append(curr_target)
         
         if not pd.isna(curr_target) and price_now > 0:
             upside_val = ((curr_target - price_now) / price_now) * 100
@@ -312,12 +306,9 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- BATCH SAVE ---
     if pending_updates and not force_fresh:
-        status.text(f"Saving {len(pending_updates)} new data points...")
         try:
             for row_idx, col_idx, val in pending_updates:
-                try:
-                    sheet.update_cell(row_idx, col_idx, val)
-                    time.sleep(0.2)
+                try: sheet.update_cell(row_idx, col_idx, val); time.sleep(0.2)
                 except: pass
         except: pass
 
@@ -337,9 +328,6 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Total Gain $'] = portfolio['Market Value'] - portfolio['Cost Basis']
     portfolio['Total Gain %'] = (portfolio['Total Gain $'] / portfolio['Cost Basis']) * 100
     portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
-    portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
-    portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
-    portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
 
     total_value = portfolio['Market Value'].sum()
@@ -358,17 +346,23 @@ if st.button("Run Full Analysis", type="primary"):
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- MACRO STRATEGY ENGINE (INSERTED) ---
+    # --- MACRO STRATEGY ENGINE (WITH FIX) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
-            # Safe Single-Cell Reads (No Indexes)
+            # Safe Reads
             regime = macro_sheet.acell('C3').value 
             score = float(macro_sheet.acell('C5').value)
             sentiment = macro_sheet.acell('C11').value 
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
             
+            # --- FALLBACK LOGIC FOR REGIME ---
+            # If C3 comes back as empty, dash, or error, infer it from the Score
+            if not regime or regime.strip() in ['-', '—', '']:
+                if score > 0: regime = "Expansion (Inferred)"
+                else: regime = "Contraction (Inferred)"
+
             # --- STRATEGY LOGIC ---
             if strategy_mode == "Momentum Chaser (Growth)":
                 if score > 0: 
@@ -409,31 +403,22 @@ if st.button("Run Full Analysis", type="primary"):
             if not opps.empty:
                 for _, row in opps.iterrows():
                     st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
-            else: st.info("No major upside opportunities detected.")
-
+            
             st.markdown("##### ⚠️ Valuation Risks")
             risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
             if not risks.empty:
                 for _, row in risks.iterrows():
                     st.error(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Downside (Target: ${row['Target Price']:.2f})")
-            else: st.success("No major valuation risks detected.")
 
         with col_insight_2:
             st.markdown("##### 🔊 Volume & Liquidity Alerts")
-            # 1. Volume Spikes
             vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
             if not vol_spikes.empty:
-                for _, r in vol_spikes.iterrows():
-                    st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x average)")
+                for _, r in vol_spikes.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x average)")
             
-            # 2. Low Liquidity Warning
             low_liq = portfolio[portfolio['Daily Liquidity'] < 50000].sort_values(by='Daily Liquidity')
             if not low_liq.empty:
-                for _, r in low_liq.iterrows():
-                    st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day). Hard to sell.")
-            
-            if vol_spikes.empty and low_liq.empty:
-                st.caption("✅ No volume or liquidity risks today.")
+                for _, r in low_liq.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day). Hard to sell.")
 
     st.markdown("---")
 
@@ -452,14 +437,11 @@ if st.button("Run Full Analysis", type="primary"):
         # TABLE PREP
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Vol Ratio', 'Daily Liquidity', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
-        # CLICKABLE URLS
         display_df['URL'] = "https://finance.yahoo.com/quote/" + portfolio['Yahoo_Ticker']
         display_df['Ticker'] = display_df['URL']
         
-        # HEATMAP FIX
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %', 'Vol Ratio']:
-            display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
-            display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
+            display_df[c] = pd.to_numeric(display_df[c].astype(str).str.replace('%', '').str.replace(',', ''), errors='coerce')
 
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
         
@@ -473,15 +455,9 @@ if st.button("Run Full Analysis", type="primary"):
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
-            .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-3, vmax=3)
-            .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
-            .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
-            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
             .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
             column_config={
-                "Ticker": st.column_config.LinkColumn(
-                    "Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"
-                ),
+                "Ticker": st.column_config.LinkColumn("Ticker", display_text=r"https://finance\.yahoo\.com/quote/(.*)"),
                 "URL": None,
                 "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
                 "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Avg Daily Volume x Price")
@@ -495,8 +471,8 @@ if st.button("Run Full Analysis", type="primary"):
         c_sector, c_stock = st.columns(2)
         with c_sector:
             st.caption("By Sector")
-            if 'Sector' in portfolio.columns:
-                sector_group = portfolio.groupby('Sector')['Market Value'].sum()
+            if col_map['Sector'] in portfolio.columns:
+                sector_group = portfolio.groupby(col_map['Sector'])['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
                 fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
                 colors = plt.cm.Paired(np.linspace(0, 1, len(sector_group)))
@@ -525,7 +501,7 @@ if st.button("Run Full Analysis", type="primary"):
         fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
         colors_bar = ['#00FF00' if x >= 0 else '#FF0000' for x in perf_df['Total Gain %']]
         bars = ax3.bar(perf_df['Ticker'], perf_df['Total Gain %'], color=colors_bar)
-        ax3.set_ylabel("Total Gain %", color="white"); ax3.tick_params(colors='white')
+        ax3.set_ylabel("Total Gain %", color="white"); ax3.tick_params(colors='white', axis='x', rotation=45)
         ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white') 
         ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
         for bar in bars:
