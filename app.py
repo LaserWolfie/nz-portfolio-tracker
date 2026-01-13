@@ -207,7 +207,7 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # ANALYST SANITY: Ignore targets that are wildly wrong (e.g. Income pasted as Target)
+        # ANALYST SANITY
         price_now = portfolio.loc[i, 'Current Price']
         if not pd.isna(curr_target) and price_now > 0:
             if curr_target > (price_now * 5): curr_target = float('nan')
@@ -348,7 +348,6 @@ if st.button("Run Full Analysis", type="primary"):
         # TABLE
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
-        # HEATMAP FIX: Ensure purely numeric & clean strings
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
             display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
@@ -370,14 +369,13 @@ if st.button("Run Full Analysis", type="primary"):
             use_container_width=True, height=600
         )
         
-        # CHARTS (Side by Side)
+        # PIE CHARTS
         st.markdown("---")
         st.subheader("📊 Portfolio Composition")
         c_sector, c_stock = st.columns(2)
         
-        # Chart 1: Sector
         with c_sector:
-            st.caption("Breakdown by Sector")
+            st.caption("By Sector")
             if 'Sector' in portfolio.columns:
                 sector_group = portfolio.groupby('Sector')['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
@@ -387,24 +385,52 @@ if st.button("Run Full Analysis", type="primary"):
                 fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig)
 
-        # Chart 2: Stock (Holdings)
         with c_stock:
-            st.caption("Breakdown by Company")
+            st.caption("By Stock")
             if 'Ticker' in portfolio.columns:
-                # Group by Ticker just in case of duplicates, though usually unique
                 stock_group = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False)
                 fig2, ax2 = plt.subplots(figsize=(5, 5))
                 fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-                # Use a different colormap for variety
                 colors2 = plt.cm.tab20c(np.linspace(0, 1, len(stock_group)))
                 
-                # Only label slices > 2% to avoid clutter, else empty string
+                # Show label only if >2% to avoid clutter
                 total_val = stock_group.sum()
                 labels = [idx if (val/total_val > 0.02) else '' for idx, val in zip(stock_group.index, stock_group)]
                 
                 ax2.pie(stock_group, labels=labels, autopct=lambda p: f'{p:.0f}%' if p > 2 else '', pctdistance=0.8, startangle=90, colors=colors2, textprops={'color':"white"})
                 fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig2)
+
+        # BAR CHART - TOTAL RETURN
+        st.markdown("---")
+        st.subheader("🚀 Total Return by Stock")
+        perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
+        
+        fig3, ax3 = plt.subplots(figsize=(12, 5))
+        fig3.patch.set_facecolor('#0E1117')
+        ax3.set_facecolor('#0E1117')
+        
+        # Green for Profit, Red for Loss
+        colors_bar = ['#00FF00' if x >= 0 else '#FF0000' for x in perf_df['Total Gain %']]
+        bars = ax3.bar(perf_df['Ticker'], perf_df['Total Gain %'], color=colors_bar)
+        
+        ax3.set_ylabel("Total Gain %", color="white")
+        ax3.tick_params(axis='x', colors='white', rotation=45)
+        ax3.tick_params(axis='y', colors='white')
+        ax3.spines['bottom'].set_color('white')
+        ax3.spines['left'].set_color('white') 
+        ax3.spines['top'].set_visible(False)
+        ax3.spines['right'].set_visible(False)
+
+        # Labels
+        for bar in bars:
+            height = bar.get_height()
+            label_y = height if height > 0 else height - 5 # Adjust label position
+            ax3.text(bar.get_x() + bar.get_width()/2., label_y,
+                     f'{height:.0f}%', ha='center', va='bottom' if height > 0 else 'top',
+                     color='white', fontsize=9, fontweight='bold')
+        
+        st.pyplot(fig3)
 
     with tab2:
         try:
