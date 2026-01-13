@@ -47,35 +47,22 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    required_cols = ['Ticker', 'Shares', 'Purchase Price']
+    # FIX: Added 'Sector' to this list so it doesn't get dropped!
+    required_cols = ['Ticker', 'Shares', 'Purchase Price', 'Sector']
+    
     for col in required_cols:
         if col not in df.columns:
-            st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
-            st.stop()
+            # If Sector is missing, just warn but don't crash (optional safety)
+            if col == 'Sector':
+                st.warning("⚠️ 'Sector' column not found in sheet. Pie chart will be empty.")
+                # Create empty sector column to prevent crash
+                df['Sector'] = "Unknown"
+            else:
+                st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
+                st.stop()
             
     portfolio = df[required_cols].copy()
     portfolio = portfolio[portfolio['Ticker'] != '']
-    
-    def clean_currency(x):
-        if isinstance(x, str):
-            return x.replace('$', '').replace(',', '').strip()
-        return x
-
-    portfolio['Shares'] = pd.to_numeric(portfolio['Shares'].apply(clean_currency), errors='coerce')
-    portfolio['Purchase Price'] = pd.to_numeric(portfolio['Purchase Price'].apply(clean_currency), errors='coerce')
-    portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
-
-    def fix_ticker(ticker):
-        ticker = str(ticker).strip().upper()
-        if ":" in ticker:
-            clean_code = ticker.split(":")[-1]
-            if "ASX" in ticker: return clean_code + ".AX"
-            else: return clean_code + ".NZ"
-        return ticker
-
-    portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
-
-    st.sidebar.success("✅ Sync Successful!")
     
     # Sidebar Mini-Chart
     hist_data = history_sheet.get_all_values()
