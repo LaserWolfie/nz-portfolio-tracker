@@ -15,10 +15,14 @@ st.title("🥝 NZ Portfolio Analyzer")
 # --- DASHBOARD EXPLANATION ---
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
-    * **Macro Signal:** Pulled directly from your Cycle Model (Cell C23).
-    * **Data Source:** Hybrid model using your manual targets (Column AB) + Yahoo live prices.
-    * **Alerts:** * 🔊 **High Volume:** Triggers if volume > 1.5x average (Dynamic daily).
-        * 💧 **Liquidity:** Flags stocks trading <$50k/day.
+    **1. Macro Strategy Engine:**
+    * **Primary Signal:** "Regime Change" (Cell C23).
+    * **Context:** "Current Regime" (Cell C3) & "Composite Score" (Cell C5).
+    * **Allocation:** Pulls target weights for Equities, Bonds, Alts, and Cash (Section 4).
+    
+    **2. The "Hybrid" Data Engine:**
+    * **Data:** Combines Yahoo Finance live data with your manual Sheet targets (Column AB).
+    * **Safety:** Monitors Volume (1.5x spikes) and Liquidity (<$50k/day).
     """)
 
 # --- CONFIGURATION ---
@@ -62,7 +66,8 @@ try:
         macro_spreadsheet = client.open_by_url(MACRO_SHEET_URL)
         macro_sheet = macro_spreadsheet.worksheet("Dashboard")
         has_macro = True
-    except:
+    except Exception as e:
+        st.sidebar.warning(f"Macro Sheet Link Failed: {e}")
         has_macro = False
     
     # --- DATA LOADING ---
@@ -71,7 +76,13 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # Column Mapping
+    required_cols = ['Ticker', 'Shares', 'Purchase Price']
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
+            st.stop()
+            
+    # SMART MAPPING
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -82,12 +93,22 @@ try:
         'Sector': next((c for c in df.columns if 'Sector' in c), 'Sector')
     }
 
-    portfolio = df[df['Ticker'] != ''].copy()
+    portfolio = df.copy()
+    portfolio = portfolio[portfolio['Ticker'] != '']
 
+    # --- CLEANING FUNCTIONS ---
     def clean_number(x):
+        """Robust cleaner"""
         if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A', '—']: return float('nan')
-        s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '').replace('%', '')
-        try: return float(s)
+        if isinstance(x, (int, float)): return float(x)
+        
+        s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
+        multiplier = 1
+        if 'M' in s: multiplier = 1_000_000; s = s.replace('M', '')
+        elif 'B' in s: multiplier = 1_000_000_000; s = s.replace('B', '')
+        
+        s = s.replace('X', '').replace('%', '')
+        try: return float(s) * multiplier
         except: return float('nan')
 
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
@@ -109,10 +130,21 @@ try:
         return ticker
 
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
-    st.sidebar.success("✅ Sync Successful")
+
+    st.sidebar.success("✅ Sync Successful!")
+    
+    try:
+        hist_data = history_sheet.get_all_values()
+        if len(hist_data) > 1:
+            hist_df = pd.DataFrame(hist_data[1:], columns=hist_data[0])
+            hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+            hist_df['Value'] = pd.to_numeric(hist_df['Value'])
+            st.sidebar.subheader("📈 Wealth Trend")
+            st.sidebar.line_chart(hist_df.set_index('Date')['Value'])
+    except: pass 
 
 except Exception as e:
-    st.error(f"Connection Error: {e}")
+    st.error(f"❌ Connection Error: {e}")
     st.stop()
 
 # --- MAIN DASHBOARD ---
@@ -156,7 +188,7 @@ if st.button("Run Full Analysis", type="primary"):
             portfolio['Daily Liquidity'] = daily_liquidities
             
         except Exception as e:
-            st.error(f"Market Data Error: {e}")
+            st.error(f"Data Error: {e}")
 
     # 2. HYBRID FETCH (DATA FILLING)
     progress = st.progress(0)
@@ -188,21 +220,16 @@ if st.button("Run Full Analysis", type="primary"):
             except: pass
 
         # Store
-        final_pe.append(curr_pe)
-        final_div.append(curr_div)
-        final_mcap.append(curr_mcap)
-        final_52_hi.append(curr_52h)
-        final_52_lo.append(curr_52l)
-        final_targets.append(curr_target)
+        final_pe.append(curr_pe); final_div.append(curr_div); final_mcap.append(curr_mcap)
+        final_52_hi.append(curr_52h); final_52_lo.append(curr_52l); final_targets.append(curr_target)
         
-        # Calculate Upside
         price = portfolio.loc[i, 'Current Price']
         if not pd.isna(curr_target) and price > 0:
             final_upside.append(((curr_target - price) / price) * 100)
         else:
             final_upside.append(float('nan'))
 
-    # ASSIGN COLUMNS (CRITICAL STEP - PREVENTS KEYERROR)
+    # ASSIGN COLUMNS (CRITICAL STEP)
     portfolio['P/E Ratio'] = final_pe
     portfolio['Div Yield %'] = final_div
     portfolio['Market Cap'] = final_mcap
@@ -219,18 +246,16 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Total Gain %'] = (portfolio['Total Gain $'] / portfolio['Cost Basis']) * 100
     portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
     
-    # Calculate % Changes for Heatmap
+    # Heatmap Calcs
     portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
     portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
-    
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
 
     total_val = portfolio['Market Value'].sum()
     total_profit = portfolio['Total Gain $'].sum()
     total_profit_pct = (total_profit / portfolio['Cost Basis'].sum()) * 100
     
-    # Save History
     today = datetime.now().strftime("%Y-%m-%d")
     try:
         hist = history_sheet.get_all_values()
@@ -238,48 +263,65 @@ if st.button("Run Full Analysis", type="primary"):
             history_sheet.append_row([today, total_val])
     except: pass
 
-    # --- MACRO STRATEGY DISPLAY ---
+    # --- MACRO STRATEGY ENGINE (COMPLETE) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
+            # SECTION 1 & 5: REGIME
             regime = macro_sheet.acell('C3').value 
-            score = float(macro_sheet.acell('C5').value)
-            sentiment = macro_sheet.acell('C11').value 
-            target_raw = clean_number(macro_sheet.acell('C16').value)
-            sheet_target = target_raw / 100 if target_raw > 1 else target_raw
-            # REGIME CHANGE SIGNAL (C23)
             regime_change = macro_sheet.acell('C23').value 
+            
+            # SECTION 2: SCORE
+            score_val = macro_sheet.acell('C5').value
+            score = float(score_val) if score_val else 0.0
+            sentiment = macro_sheet.acell('C11').value 
+            
+            # SECTION 4: TARGET ALLOCATION (FULL PULL)
+            alloc_equity = clean_number(macro_sheet.acell('C16').value) / 100
+            alloc_bonds = clean_number(macro_sheet.acell('C17').value) / 100
+            alloc_alts = clean_number(macro_sheet.acell('C18').value) / 100
+            alloc_cash = clean_number(macro_sheet.acell('C19').value) / 100
 
             if not regime or regime in ['-', '—']: regime = "Regime Loading..."
             
-            # Strategy Logic
+            # STRATEGY LOGIC
+            target_pct = alloc_equity # Default
             if strategy_mode == "Momentum Chaser (Growth)":
                 if score > 0: target_pct = 0.70; logic_msg = "🚀 Economy is Expanding. Ignoring Sentiment."
-                else: target_pct = sheet_target; logic_msg = "⚠️ Economy weak. Using system default."
+                else: logic_msg = "⚠️ Economy weak. Using system default."
             elif strategy_mode == "Wealth Shield (Defensive)":
-                if "Euphoric" in str(sentiment): target_pct = 0.10; logic_msg = "🛡️ Sentiment Euphoric. Capping at 10%."
-                else: target_pct = min(sheet_target, 0.35); logic_msg = "🛡️ Defensive Cap active."
+                if "Euphoric" in str(sentiment): target_pct = 0.10; logic_msg = "🛡️ Sentiment Euphoric. Capping Equity at 10%."
+                else: target_pct = min(alloc_equity, 0.35); logic_msg = "🛡️ Defensive Cap active."
             else:
-                target_pct = sheet_target; logic_msg = "✅ Following Cycle Model exactly."
+                logic_msg = "✅ Following Cycle Model exactly."
 
+            # DISPLAY METRICS
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Regime Change", regime_change, help="Primary Signal from Cell C23")
-            m2.metric("Macro Score", f"{score}")
+            m1.metric("Regime Change", regime_change, f"Current: {regime}")
+            m2.metric("Composite Score", f"{score}", "Range: -5 to +5")
             m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
-            m4.metric("Target Equity", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
+            m4.metric("Equity Target", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
+            
             st.info(f"**Strategy Logic:** {logic_msg}")
-            st.progress(target_pct)
+            
+            # ASSET ALLOCATION VISUAL (SECTION 4)
+            st.caption("🎯 System Target Asset Allocation (Section 4)")
+            alloc_data = pd.DataFrame({
+                "Asset": ["Equities", "Bonds", "Alternatives", "Cash"],
+                "Target": [alloc_equity, alloc_bonds, alloc_alts, alloc_cash]
+            })
+            st.bar_chart(alloc_data.set_index("Asset"), height=200)
 
         except Exception as e:
             st.warning(f"Macro Sync Issue: {e}")
 
     st.markdown("---")
 
-    # --- KEY INSIGHTS ---
+    # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
     c_ins1, c_ins2 = st.columns(2)
     with c_ins1:
-        st.markdown("##### 🚀 Opportunities & Risks")
+        st.markdown("##### 🚀 Analyst Opportunities")
         opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
         for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside (Target: ${r['Target Price']:.2f})")
         
@@ -296,12 +338,11 @@ if st.button("Run Full Analysis", type="primary"):
         * **Macro:** Dairy prices recovering (+6.3%).
         """)
         
-        # ALERTS
         vol = portfolio[portfolio['Vol Ratio'] > 1.5]
         for _, r in vol.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x average)")
         
         liq = portfolio[portfolio['Daily Liquidity'] < 50000]
-        for _, r in liq.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day)")
+        for _, r in liq.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day). Hard to sell.")
 
     # --- METRICS & TABLE ---
     st.markdown("---")
@@ -312,7 +353,6 @@ if st.button("Run Full Analysis", type="primary"):
     k3.metric("Today's Gain", f"${portfolio['Day Change $'].sum():,.2f}")
     k4.metric("Est. Annual Income", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # HOLDINGS TABLE (RESTORED HEATMAPS)
     display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Vol Ratio', 'Daily Liquidity', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
     
     st.dataframe(
@@ -324,15 +364,15 @@ if st.button("Run Full Analysis", type="primary"):
         }, na_rep="-")
         .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
         .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
-        .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5) # Restored Heatmap
-        .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10) # Restored Heatmap
-        .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-20, vmax=20) # Restored Heatmap
-        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8) # Restored Heatmap
+        .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
+        .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
+        .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-20, vmax=20)
+        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
         .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
         use_container_width=True, height=600
     )
 
-    # CHARTS (RESTORED PIE BY STOCK)
+    # CHARTS
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Composition by Sector")
@@ -343,13 +383,12 @@ if st.button("Run Full Analysis", type="primary"):
             st.pyplot(fig)
             
     with c2:
-        st.subheader("Composition by Stock") # Restored
+        st.subheader("Composition by Stock")
         p_data = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False)
         fig2, ax2 = plt.subplots(figsize=(5,5)); fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
         ax2.pie(p_data, labels=p_data.index, autopct='%1.0f%%', textprops={'color':'white'})
         st.pyplot(fig2)
 
-    # TOTAL RETURN BAR CHART
     st.markdown("---")
     st.subheader("Total Return")
     p_sort = portfolio.sort_values('Total Gain %', ascending=False)
