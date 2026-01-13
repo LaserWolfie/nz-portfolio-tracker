@@ -280,20 +280,35 @@ if st.button("Run Full Analysis", type="primary"):
     with tab1:
         col_table, col_pie = st.columns([2.5, 1])
         with col_table:
-            display_df = portfolio[['Ticker', 'Sector', 'Current Price', 'Beta', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'Market Value']].copy()
+            # FIX: Added 'P/E Ratio' and 'Div Yield %' back to this list
+            display_df = portfolio[[
+                'Ticker', 'Sector', 'Current Price', 'P/E Ratio', 
+                'Div Yield %', 'Beta', 'Day Change %', '30D %', 
+                '1Y %', 'Total Gain %', 'Market Value'
+            ]].copy()
+            
             display_df = display_df.sort_values(by='Total Gain %', ascending=False)
+            
             st.dataframe(
                 display_df.style.format({
-                    "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
-                    "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
-                    "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", "Beta": "{:.2f}"
+                    "Current Price": "${:.2f}", 
+                    "Market Value": "${:,.0f}",
+                    "Day Change %": "{:+.2f}%", 
+                    "30D %": "{:+.2f}%", 
+                    "1Y %": "{:+.2f}%", 
+                    "Total Gain %": "{:+.2f}%", 
+                    "Beta": "{:.2f}",
+                    "Div Yield %": "{:.2f}%",
+                    "P/E Ratio": "{:.1f}"
                 })
                 .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
                 .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
                 .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10)
                 .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-30, vmax=30)
+                .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
                 .background_gradient(subset=['Beta'], cmap="coolwarm", vmin=0.5, vmax=1.5),
                 use_container_width=True, height=600
+            )
             )
         with col_pie:
             # SAFETY CHECK: Only draw pie chart if we have valid sectors
