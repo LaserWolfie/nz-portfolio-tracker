@@ -309,7 +309,7 @@ if st.button("Run Full Analysis", type="primary"):
                 .background_gradient(subset=['Beta'], cmap="coolwarm", vmin=0.5, vmax=1.5),
                 use_container_width=True, height=600
             )
-            )
+            
         with col_pie:
             # SAFETY CHECK: Only draw pie chart if we have valid sectors
             if 'Sector' in portfolio.columns and not portfolio['Sector'].isnull().all():
