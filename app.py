@@ -132,7 +132,6 @@ if st.button("Run Full Analysis", type="primary"):
         except: pass
 
     # --- STEP 2: BULK PRICE & VOLUME HISTORY ---
-    # Re-integrated Volume/Liquidity Logic
     with st.spinner('Fetching prices & volume...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
@@ -158,7 +157,7 @@ if st.button("Run Full Analysis", type="primary"):
                         p30 = float(closes.iloc[-22]) if len(closes) >= 22 else (float(closes.iloc[0]) if len(closes) > 0 else curr)
                         p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
                         
-                        # VOLUME CALCS
+                        # VOLUME
                         vol_today = float(volumes.iloc[-1])
                         vol_avg = volumes.iloc[-65:].mean() if len(volumes) > 0 else 0
                         
@@ -167,7 +166,7 @@ if st.button("Run Full Analysis", type="primary"):
                         
                         liquidity = vol_avg * curr
 
-                        # BETA CALC
+                        # BETA
                         beta_val = 1.0
                         if len(closes) > 30 and len(market_returns) > 30:
                             stock_ret = closes.pct_change().dropna()
@@ -227,10 +226,8 @@ if st.button("Run Full Analysis", type="primary"):
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
-        # ANALYST SANITY (Trust User Data)
+        # NO TARGET SANITY CHECK (Trust User Data)
         price_now = portfolio.loc[i, 'Current Price']
-        if not pd.isna(curr_target) and price_now > 0:
-            if curr_target > (price_now * 5): curr_target = float('nan')
 
         # 2. FETCH MISSING
         fetch_needed = False
@@ -347,7 +344,7 @@ if st.button("Run Full Analysis", type="primary"):
 
     # --- INSIGHTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("View Opportunities & Risks", expanded=True):
+    with st.expander("View Opportunities & Market Context", expanded=True):
         col_insight_1, col_insight_2 = st.columns(2)
         
         with col_insight_1:
@@ -356,10 +353,9 @@ if st.button("Run Full Analysis", type="primary"):
             if not opps.empty:
                 for _, row in opps.iterrows():
                     st.success(f"**{row['Ticker']}**: {row['Analyst Upside']:.1f}% Upside (Target: ${row['Target Price']:.2f})")
-            else: st.info("No major upside opportunities detected.")
+            else: st.info("No major upside opportunities based on current targets.")
 
-            st.markdown("##### ⚠️ Valuation Risks (Target < Price)")
-            # This logic catches stocks where Target Price ($9.55) < Current Price ($10.70)
+            st.markdown("##### ⚠️ Valuation Risks")
             risks = portfolio[portfolio['Analyst Upside'] < -5].sort_values(by='Analyst Upside').head(3)
             if not risks.empty:
                 for _, row in risks.iterrows():
@@ -367,16 +363,14 @@ if st.button("Run Full Analysis", type="primary"):
             else: st.success("No major valuation risks detected.")
 
         with col_insight_2:
-            st.markdown("##### 🔊 Volume & Liquidity")
-            vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
-            if not vol_spikes.empty:
-                for _, r in vol_spikes.iterrows():
-                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume")
-            else: st.info("Volume is normal today.")
-
-            low_liq = portfolio[portfolio['Daily Liquidity'] < 50000]
-            if not low_liq.empty:
-                st.caption(f"⚠️ Low Liquidity (<$50k/day): {', '.join(low_liq['Ticker'].tolist())}")
+            st.markdown("##### 📰 Recent Market Context (Jan 2026)")
+            st.info("""
+            * **Infratil (IFT):** Rated BBB+ Investment Grade (Dec '25). HY26 EBITDAF up 7%. Divesting RetireAustralia.
+            * **EBOS Group (EBO):** Underlying EBITDA up 7.5%. Growth driven by Southeast Asia & community pharmacy.
+            * **Skellerup (SKL):** FY26 Guidance upgraded (Oct '25) to NPAT $55-60m on strong dairy demand.
+            * **A2 Milk (ATM):** FY26 Revenue Guidance upgraded (Nov '25). Top-4 brand position in China.
+            * **Macro:** NZ inflation tracking firmer; OCR cuts less likely near-term. Dairy prices +6.3% in Jan '26 auction.
+            """)
 
     st.markdown("---")
 
@@ -435,7 +429,7 @@ if st.button("Run Full Analysis", type="primary"):
                 ),
                 "URL": None,
                 "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", help="Relative Volume (1.0 = Normal)"),
-                "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Daily Traded Value ($)")
+                "Daily Liquidity": st.column_config.NumberColumn("Liquidity", help="Avg Daily Volume x Price")
             },
             use_container_width=True, height=600
         )
