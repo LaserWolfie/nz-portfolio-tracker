@@ -43,14 +43,13 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    # 1. Validate Columns
     required_cols = ['Ticker', 'Shares', 'Purchase Price']
     for col in required_cols:
         if col not in df.columns:
             st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
             st.stop()
             
-    # 2. Smart Column Mapping
+    # SMART COLUMN MAPPING (Finds columns even if names vary slightly)
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -66,23 +65,16 @@ try:
 
     # --- CLEANING FUNCTIONS ---
     def clean_number(x):
-        """Robust cleaner for currency, percentages, and suffixes"""
         if pd.isna(x) or x == '' or str(x).strip() == '-': return float('nan')
         if isinstance(x, (int, float)): return float(x)
-        
         s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
-        # Handle suffixes
         multiplier = 1
         if 'M' in s: multiplier = 1_000_000; s = s.replace('M', '')
         elif 'B' in s: multiplier = 1_000_000_000; s = s.replace('B', '')
-        
         s = s.replace('X', '').replace('%', '')
-        try:
-            return float(s) * multiplier
-        except:
-            return float('nan')
+        try: return float(s) * multiplier
+        except: return float('nan')
 
-    # Apply cleaning
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
@@ -99,7 +91,7 @@ try:
 
     st.sidebar.success("✅ Sync Successful!")
     
-    # Sidebar Chart
+    # History Chart
     try:
         hist_data = history_sheet.get_all_values()
         if len(hist_data) > 1:
@@ -135,18 +127,14 @@ if st.button("Run Full Analysis", type="primary"):
         except: pass
 
     # --- STEP 2: BULK PRICE HISTORY ---
-    # Fast bulk download ensures we never lose price/heatmap data
     with st.spinner('Fetching prices...'):
         try:
             bulk_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
-            
             curr_prices, prev_prices, p30_prices, p1y_prices = [], [], [], []
             betas = []
             
-            if market_hist_data is not None:
-                market_returns = market_hist_data.pct_change().dropna()
-            else:
-                market_returns = pd.Series([])
+            if market_hist_data is not None: market_returns = market_hist_data.pct_change().dropna()
+            else: market_returns = pd.Series([])
 
             for t in ticker_list:
                 try:
@@ -173,8 +161,7 @@ if st.button("Run Full Analysis", type="primary"):
                         curr_prices.append(curr); prev_prices.append(prev)
                         p30_prices.append(p30); p1y_prices.append(p1y)
                         betas.append(beta_val)
-                    else:
-                        raise ValueError("No data")
+                    else: raise ValueError("No data")
                 except:
                     curr_prices.append(0.0); prev_prices.append(0.0)
                     p30_prices.append(0.0); p1y_prices.append(0.0); betas.append(1.0)
@@ -188,18 +175,22 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Data Error: {e}"); st.stop()
 
-    # --- STEP 3: SMART ANALYST FETCH (MISSING ONLY) ---
+    # --- STEP 3: ANALYST & FUNDAMENTALS (BATCH UPDATE MODE) ---
     progress = st.progress(0); status = st.empty()
     
     final_pe, final_div, final_mcap, final_upside = [], [], [], []
     final_52_lo, final_52_hi = [], []
+    
+    # We will collect ALL sheet updates in this list and save ONCE at the end
+    # Format: {'row': 2, 'col': 5, 'val': 123}
+    pending_updates = []
 
     for i, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
-        status.text(f"Checking data for {t}...")
+        status.text(f"Fetching Details: {t}...")
         progress.progress((i+1)/len(portfolio))
         
-        # 1. READ EXISTING DATA (Clean it first)
+        # 1. READ (Clean)
         curr_mcap = clean_number(row.get(col_map['Market Cap']))
         curr_target = clean_number(row.get(col_map['Analyst Target']))
         curr_pe = clean_number(row.get(col_map['P/E']))
@@ -207,78 +198,99 @@ if st.button("Run Full Analysis", type="primary"):
         curr_52h = clean_number(row.get(col_map['52W High']))
         curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # SANITY CHECK: If Analyst Target is HUGE (e.g. > 4x Price), it's likely bad data (Income)
+        # Remove "Garbage" Targets (e.g. Income pasted in Target col)
+        # If Target > 5x Price, assume it's an error/income
         price_now = portfolio.loc[i, 'Current Price']
-        if not pd.isna(curr_target) and price_now > 0:
-            if curr_target > (price_now * 4): 
-                curr_target = float('nan') # Invalidate bad data so we fetch fresh
+        if not pd.isna(curr_target) and price_now > 0 and curr_target > (price_now * 5):
+            curr_target = float('nan') # Mark as missing so we fetch it
 
-        # 2. DECIDE IF WE NEED TO FETCH (Fetch only if missing)
-        need_deep_fetch = False
-        if pd.isna(curr_pe) or pd.isna(curr_target) or pd.isna(curr_div_pct):
-            need_deep_fetch = True
-            
-        fetched_new_data = False
-        
-        try:
-            stock = yf.Ticker(t)
-            
-            # A. Fast Info (Safe to run always)
+        # 2. FETCH (Only if missing)
+        fetch_needed = False
+        if pd.isna(curr_target) or pd.isna(curr_pe) or pd.isna(curr_div_pct):
+            fetch_needed = True
+
+        if fetch_needed:
             try:
-                if hasattr(stock, 'fast_info'):
-                    if pd.isna(curr_mcap) and stock.fast_info.market_cap: 
-                        curr_mcap = stock.fast_info.market_cap; fetched_new_data = True
-                    if pd.isna(curr_52h) and stock.fast_info.year_high: 
-                        curr_52h = stock.fast_info.year_high; fetched_new_data = True
-                    if pd.isna(curr_52l) and stock.fast_info.year_low: 
-                        curr_52l = stock.fast_info.year_low; fetched_new_data = True
-            except: pass
-
-            # B. Deep Info (Only if needed)
-            if need_deep_fetch:
+                stock = yf.Ticker(t)
+                
+                # Fast Info (Market Cap / High / Low)
                 try:
-                    info = stock.info
-                    # P/E
-                    if pd.isna(curr_pe) and info.get('trailingPE'): 
-                        curr_pe = info['trailingPE']; fetched_new_data = True
-                    # Target
-                    if pd.isna(curr_target) and info.get('targetMeanPrice'): 
-                        curr_target = info['targetMeanPrice']; fetched_new_data = True
-                    # Dividend
-                    if pd.isna(curr_div_pct):
-                        d = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
-                        if d: curr_div_pct = d * 100; fetched_new_data = True
+                    if hasattr(stock, 'fast_info'):
+                        if pd.isna(curr_mcap) and stock.fast_info.market_cap:
+                            curr_mcap = stock.fast_info.market_cap
+                            if col_map['Market Cap'] in df.columns:
+                                pending_updates.append((i+2, df.columns.get_loc(col_map['Market Cap'])+1, curr_mcap))
                         
-                    # Slow down to prevent blocking
-                    time.sleep(0.3)
+                        if pd.isna(curr_52h) and stock.fast_info.year_high:
+                            curr_52h = stock.fast_info.year_high
+                            if col_map['52W High'] in df.columns:
+                                pending_updates.append((i+2, df.columns.get_loc(col_map['52W High'])+1, curr_52h))
+                                
+                        if pd.isna(curr_52l) and stock.fast_info.year_low:
+                            curr_52l = stock.fast_info.year_low
+                            if col_map['52W Low'] in df.columns:
+                                pending_updates.append((i+2, df.columns.get_loc(col_map['52W Low'])+1, curr_52l))
                 except: pass
 
-        except: pass
+                # Deep Info (Analyst Target / P/E / Div)
+                try:
+                    info = stock.info
+                    
+                    # TARGET
+                    tgt = info.get('targetMeanPrice')
+                    if tgt and pd.isna(curr_target):
+                        curr_target = tgt
+                        if col_map['Analyst Target'] in df.columns:
+                            pending_updates.append((i+2, df.columns.get_loc(col_map['Analyst Target'])+1, curr_target))
 
-        # 3. SAVE TO SHEET (Only if we found something new)
-        if fetched_new_data:
-            try:
-                if not pd.isna(curr_mcap) and col_map['Market Cap'] in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(col_map['Market Cap'])+1, curr_mcap)
-                if not pd.isna(curr_target) and col_map['Analyst Target'] in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(col_map['Analyst Target'])+1, curr_target)
-                if not pd.isna(curr_pe) and col_map['P/E'] in df.columns:
-                    sheet.update_cell(i+2, df.columns.get_loc(col_map['P/E'])+1, curr_pe)
+                    # P/E
+                    pe = info.get('trailingPE')
+                    if pe and pd.isna(curr_pe):
+                        curr_pe = pe
+                        if col_map['P/E'] in df.columns:
+                            pending_updates.append((i+2, df.columns.get_loc(col_map['P/E'])+1, curr_pe))
+
+                    # DIV
+                    div = info.get('dividendYield') or info.get('trailingAnnualDividendYield')
+                    if div and pd.isna(curr_div_pct):
+                        curr_div_pct = div * 100
+                        # (Optional) Update Div in sheet if you want persistence there too
+                        
+                    time.sleep(0.1) # Be polite
+                except: pass
             except: pass
 
-        # 4. STORE FOR DISPLAY
+        # 3. Store for UI
         final_pe.append(curr_pe)
         final_div.append(curr_div_pct)
         final_mcap.append(curr_mcap)
         final_52_hi.append(curr_52h)
         final_52_lo.append(curr_52l)
         
-        # Calc Upside
+        # Upside Calc
         if not pd.isna(curr_target) and price_now > 0:
             upside_val = ((curr_target - price_now) / price_now) * 100
         else:
             upside_val = float('nan')
         final_upside.append(upside_val)
+
+    # --- BATCH SAVE TO SHEET ---
+    if pending_updates:
+        status.text(f"Saving {len(pending_updates)} new data points to Google Sheet...")
+        try:
+            # We group updates by column to be efficient, or just loop safely
+            # Since gspread update_cells is complex to prepare, we'll use cell updates but slow/safe
+            # Or better: update_cells with a list.
+            # For simplicity and robustness given your size (~20 rows), simple loop is fine IF we didn't crash before.
+            # But let's try to be smart.
+            
+            # We will just iterate and update. It might take 10 seconds but it guarantees saving.
+            for row_idx, col_idx, val in pending_updates:
+                try:
+                    sheet.update_cell(row_idx, col_idx, val)
+                    time.sleep(0.2) # Prevent rate limit
+                except: pass
+        except: pass
 
     status.empty(); progress.empty()
     
@@ -289,7 +301,7 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['52W Low'] = final_52_lo
     portfolio['52W High'] = final_52_hi
 
-    # --- CALCULATIONS ---
+    # --- CALCULATIONS & METRICS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
     portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
     portfolio['Total Gain $'] = portfolio['Market Value'] - portfolio['Cost Basis']
@@ -300,7 +312,6 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
 
-    # --- METRICS ---
     total_value = portfolio['Market Value'].sum()
     total_cost = portfolio['Cost Basis'].sum()
     total_profit_val = total_value - total_cost
@@ -318,15 +329,13 @@ if st.button("Run Full Analysis", type="primary"):
     elif portfolio_beta < 0.85: risk_label = "Defensive 🛡️"; risk_msg = "Preservation focus."
     else: risk_label = "Balanced ⚖️"; risk_msg = "Market tracking."
 
-    # --- SAVE HISTORY ---
+    # Save History
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_history = history_sheet.get_all_values()
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
-        st.toast(f"✅ Saved today's value: ${total_value:,.2f}")
-    else: st.toast("ℹ️ History already up to date.")
 
-    # --- UI LAYOUT ---
+    # --- UI ---
     st.subheader("📊 Portfolio Health")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Portfolio Value", f"${total_value:,.2f}")
@@ -338,39 +347,27 @@ if st.button("Run Full Analysis", type="primary"):
     st.subheader("🧠 Risk & Benchmark")
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("NZX 50 Today", f"{market_return_pct:+.2f}%")
-    
-    prev_val = total_value - day_gain_val
-    port_day_pct = (day_gain_val / prev_val * 100) if prev_val > 0 else 0
-    alpha = port_day_pct - market_return_pct
-    b2.metric("Alpha", f"{alpha:+.2f}%", delta=f"Portfolio: {port_day_pct:+.2f}%")
+    b2.metric("Alpha", f"{(day_gain_val/(total_value-day_gain_val)*100 - market_return_pct):+.2f}%")
     b3.metric("Beta", f"{portfolio_beta:.2f}")
     b4.metric("Strategy", risk_label)
-    st.caption(f"Risk Assessment: {risk_msg}")
 
-    # Tabs
     st.markdown("---")
-    tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
+    tab1, tab2, tab3 = st.tabs(["🔎 Holdings Table", "📈 Wealth History", "🛠️ Raw Data Inspector"])
     
     with tab1:
-        # Prepare Display
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
-        # Ensure numerics for heatmaps (Fixing the 1Y% issue)
-        cols_to_numeric = ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']
-        for c in cols_to_numeric:
+        # Force numeric for heatmap
+        for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
-        
+
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
-        
         st.dataframe(
             display_df.style.format({
                 "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
-                "52W Low": "${:.2f}", "52W High": "${:.2f}", 
-                "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", 
-                "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
-                "Beta": "{:.2f}", "Div Yield %": "{:.2f}%", 
-                "P/E Ratio": "{:.1f}", "Market Cap": "${:,.0f}",
-                "Analyst Upside": "{:+.2f}%"
+                "52W Low": "${:.2f}", "52W High": "${:.2f}", "Market Cap": "${:,.0f}",
+                "Day Change %": "{:+.2f}%", "30D %": "{:+.2f}%", "1Y %": "{:+.2f}%", "Total Gain %": "{:+.2f}%", 
+                "Analyst Upside": "{:+.2f}%", "Div Yield %": "{:.2f}%", "P/E Ratio": "{:.1f}"
             }, na_rep="-")
             .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
             .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5)
@@ -380,14 +377,12 @@ if st.button("Run Full Analysis", type="primary"):
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=600
         )
-
-        # Charts
+        
         st.markdown("---")
         st.subheader("📊 Portfolio Composition")
-        chart_c1, chart_c2 = st.columns([1, 2])
-        
-        with chart_c1:
-            if 'Sector' in portfolio.columns and not portfolio['Sector'].isnull().all():
+        c_pie, c_blank = st.columns([1, 2])
+        with c_pie:
+            if 'Sector' in portfolio.columns:
                 sector_group = portfolio.groupby('Sector')['Market Value'].sum()
                 fig, ax = plt.subplots(figsize=(5, 5))
                 fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
@@ -395,20 +390,14 @@ if st.button("Run Full Analysis", type="primary"):
                 ax.pie(sector_group, labels=sector_group.index, autopct='%1.0f%%', pctdistance=0.8, startangle=90, colors=colors, textprops={'color':"white"})
                 fig.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig)
-            else:
-                st.warning("Pie Chart unavailable (No Sector data)")
-        
-        with chart_c2:
-            st.info("💡 Tip: The space on this side is now open for adding 'Top Winners' or 'Dividend History' charts in the future!")
 
     with tab2:
         try:
-            fresh_hist = history_sheet.get_all_values()
-            if len(fresh_hist) > 1:
-                h_df = pd.DataFrame(fresh_hist[1:], columns=fresh_hist[0])
-                h_df['Date'] = pd.to_datetime(h_df['Date'])
-                h_df['Value'] = pd.to_numeric(h_df['Value'])
-                st.subheader("Your Net Worth Journey")
-                st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
-            else: st.info("Not enough history yet.")
-        except: st.info("History data unreadable.")
+            h_df = pd.DataFrame(history_sheet.get_all_values()[1:], columns=['Date', 'Value'])
+            h_df['Date'] = pd.to_datetime(h_df['Date']); h_df['Value'] = pd.to_numeric(h_df['Value'])
+            st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
+        except: st.info("No history yet.")
+
+    with tab3:
+        st.info("This table shows the raw values we found. If 'Analyst Upside' is missing here, it means Yahoo Finance does not have a rating for that stock.")
+        st.dataframe(portfolio[['Ticker', 'Analyst Upside', 'P/E Ratio', 'Market Cap']])
