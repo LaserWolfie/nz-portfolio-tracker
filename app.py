@@ -57,6 +57,7 @@ try:
         'Div Yield': next((c for c in df.columns if 'Div' in c and 'Yield' in c), 'Div Yield'),
         '52W High': next((c for c in df.columns if '52' in c and 'High' in c), '52W High'),
         '52W Low': next((c for c in df.columns if '52' in c and 'Low' in c), '52W Low'),
+        'Insider': next((c for c in df.columns if 'Insider' in c), 'Insider Activity'),
         'Sector': 'Sector'
     }
 
@@ -203,7 +204,7 @@ if st.button("Run Full Analysis", type="primary"):
             curr_52h = clean_number(row.get(col_map['52W High']))
             curr_52l = clean_number(row.get(col_map['52W Low']))
         
-        # DIVIDEND FIX: If Yield is 545% -> Convert to 5.45%
+        # DIVIDEND FIX
         if not pd.isna(curr_div_pct) and curr_div_pct > 30: 
             curr_div_pct = curr_div_pct / 100
 
@@ -345,14 +346,24 @@ if st.button("Run Full Analysis", type="primary"):
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # TABLE
+        # TABLE PREP
         display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
         
+        # CREATE CLICKABLE URLS
+        # 1. Create a URL column (hidden)
+        display_df['URL'] = "https://finance.yahoo.com/quote/" + portfolio['Yahoo_Ticker']
+        
+        # 2. Swap 'Ticker' content with URL
+        display_df['Ticker'] = display_df['URL']
+        
+        # HEATMAP FIX
         for c in ['Day Change %', '30D %', '1Y %', 'Total Gain %', 'Analyst Upside', 'Div Yield %']:
             display_df[c] = display_df[c].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
             display_df[c] = pd.to_numeric(display_df[c], errors='coerce')
 
         display_df = display_df.sort_values(by='Total Gain %', ascending=False)
+        
+        # CONFIGURE CLICKABLE COLUMN
         st.dataframe(
             display_df.style.format({
                 "Current Price": "${:.2f}", "Market Value": "${:,.0f}",
@@ -366,6 +377,13 @@ if st.button("Run Full Analysis", type="primary"):
             .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-5, vmax=5)
             .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-15, vmax=15)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+            column_config={
+                "Ticker": st.column_config.LinkColumn(
+                    "Ticker", 
+                    display_text=r"https://finance\.yahoo\.com/quote/(.*)" # Regex to extract ticker
+                ),
+                "URL": None # Hide the raw URL column
+            },
             use_container_width=True, height=600
         )
         
@@ -392,11 +410,8 @@ if st.button("Run Full Analysis", type="primary"):
                 fig2, ax2 = plt.subplots(figsize=(5, 5))
                 fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
                 colors2 = plt.cm.tab20c(np.linspace(0, 1, len(stock_group)))
-                
-                # Show label only if >2% to avoid clutter
                 total_val = stock_group.sum()
                 labels = [idx if (val/total_val > 0.02) else '' for idx, val in zip(stock_group.index, stock_group)]
-                
                 ax2.pie(stock_group, labels=labels, autopct=lambda p: f'{p:.0f}%' if p > 2 else '', pctdistance=0.8, startangle=90, colors=colors2, textprops={'color':"white"})
                 fig2.gca().add_artist(plt.Circle((0,0),0.60,fc='#0E1117'))
                 st.pyplot(fig2)
@@ -405,31 +420,17 @@ if st.button("Run Full Analysis", type="primary"):
         st.markdown("---")
         st.subheader("🚀 Total Return by Stock")
         perf_df = portfolio.sort_values(by='Total Gain %', ascending=False)
-        
         fig3, ax3 = plt.subplots(figsize=(12, 5))
-        fig3.patch.set_facecolor('#0E1117')
-        ax3.set_facecolor('#0E1117')
-        
-        # Green for Profit, Red for Loss
+        fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
         colors_bar = ['#00FF00' if x >= 0 else '#FF0000' for x in perf_df['Total Gain %']]
         bars = ax3.bar(perf_df['Ticker'], perf_df['Total Gain %'], color=colors_bar)
-        
-        ax3.set_ylabel("Total Gain %", color="white")
-        ax3.tick_params(axis='x', colors='white', rotation=45)
-        ax3.tick_params(axis='y', colors='white')
-        ax3.spines['bottom'].set_color('white')
-        ax3.spines['left'].set_color('white') 
-        ax3.spines['top'].set_visible(False)
-        ax3.spines['right'].set_visible(False)
-
-        # Labels
+        ax3.set_ylabel("Total Gain %", color="white"); ax3.tick_params(colors='white')
+        ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white') 
+        ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
         for bar in bars:
             height = bar.get_height()
-            label_y = height if height > 0 else height - 5 # Adjust label position
-            ax3.text(bar.get_x() + bar.get_width()/2., label_y,
-                     f'{height:.0f}%', ha='center', va='bottom' if height > 0 else 'top',
-                     color='white', fontsize=9, fontweight='bold')
-        
+            label_y = height if height > 0 else height - 5
+            ax3.text(bar.get_x() + bar.get_width()/2., label_y, f'{height:.0f}%', ha='center', va='bottom' if height > 0 else 'top', color='white', fontsize=9, fontweight='bold')
         st.pyplot(fig3)
 
     with tab2:
