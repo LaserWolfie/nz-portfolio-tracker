@@ -17,23 +17,21 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Signal (Cell C23):** Primary cycle indicator (e.g., "Risk-On").
-    * **Current Regime (Cell C3):** The broader economic state (e.g., "Expansion").
+    * **Regime Signal:** Combines "Regime Change" (C23) and "Current Regime" (C3).
     * **Strategy Toggles:**
-        * *Cycle Purist:* Follows your spreadsheet's 15% Equity target exactly.
-        * *Momentum Chaser:* Ignores "Euphoria" if Macro Score > 0 (Target: 70%).
-        * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric).
+        * *Cycle Purist:* Adheres strictly to the sheet's Equity Target.
+        * *Momentum Chaser:* Overrides "Euphoria" if the Macro Score is positive.
+        * *Wealth Shield:* Caps equity to protect capital during "Euphoria".
     
     **2. The "Hybrid" Data Engine:**
     * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
     * **Liquidity:** Flags stocks trading <$50k/day.
-    * **Volume:** Alerts if trading volume > 1.5x the 65-day average.
     """)
 
 # --- CONFIGURATION ---
 SHEET_NAME = "Share Portfolio" 
 HISTORY_TAB_NAME = "History"
-CHART_TAB_NAME = "chart_data"  # New tab for raw policy rate data
+CHART_TAB_NAME = "chart_data"
 BENCHMARK_TICKER = "^NZ50"
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
@@ -250,26 +248,25 @@ if st.button("Run Full Analysis", type="primary"):
             history_sheet.append_row([today, total_val])
     except: pass
 
-    # --- MACRO STRATEGY ENGINE (UPDATED) ---
+    # --- MACRO STRATEGY ENGINE ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
-            # SECTION 1 & 5: REGIME
+            # READ MACRO CELLS
             regime = macro_sheet.acell('C3').value # "Expansion"
             regime_change = macro_sheet.acell('C23').value # "Risk-On..."
-            
-            # SECTION 2: SCORE
             score_val = macro_sheet.acell('C5').value
             score = float(score_val) if score_val else 0.0
-            sentiment = macro_sheet.acell('C11').value 
             
-            # SECTION 4: TARGET ALLOCATION (FULL PULL)
+            # FIXED SENTIMENT MAPPING (C11 -> C12)
+            # C11 is Credit Stress (Benign), C12 is Sentiment (Euphoric)
+            sentiment = macro_sheet.acell('C12').value #
+            
+            # ALLOCATION TARGETS
             alloc_equity = clean_number(macro_sheet.acell('C16').value) / 100
             alloc_bonds = clean_number(macro_sheet.acell('C17').value) / 100
             alloc_alts = clean_number(macro_sheet.acell('C18').value) / 100
             alloc_cash = clean_number(macro_sheet.acell('C19').value) / 100
-
-            if not regime or regime in ['-', '—']: regime = "Regime Loading..."
             
             # STRATEGY LOGIC
             target_pct = alloc_equity # Default
@@ -282,28 +279,34 @@ if st.button("Run Full Analysis", type="primary"):
             else:
                 logic_msg = "✅ Following Cycle Model exactly."
 
-            # METRICS DISPLAY
+            # METRICS
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Regime Signal (C23)", regime_change, f"Macro: {regime}") #
+            m1.metric("Regime Change (Signal)", regime_change, f"Macro: {regime}")
             m2.metric("Composite Score", f"{score}", "Range: -5 (Restrictive) to +5 (Supportive)")
             m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
             m4.metric("Equity Target", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
             st.info(f"**Strategy Logic:** {logic_msg}")
             
-            # ASSET ALLOCATION CHART (FIXED Y-AXIS PERCENTAGE)
-            st.caption("🎯 System Target Asset Allocation (Section 4)")
+            # IMPROVED ASSET ALLOCATION CHART
+            st.caption("🎯 System Target Asset Allocation")
             alloc_df = pd.DataFrame({
                 "Asset": ["Equities", "Bonds", "Alternatives", "Cash"],
                 "Allocation": [alloc_equity, alloc_bonds, alloc_alts, alloc_cash]
             })
             
-            c = alt.Chart(alloc_df).mark_bar().encode(
-                x=alt.X('Asset', sort=None),
-                y=alt.Y('Allocation', axis=alt.Axis(format='%')), # Formats axis as 0% - 100%
+            # Horizontal Bar with Text Labels
+            base = alt.Chart(alloc_df).encode(
+                y=alt.Y('Asset', sort=None, title=""),
+                x=alt.X('Allocation', axis=None),
+            )
+            bars = base.mark_bar().encode(
                 color=alt.Color('Asset', legend=None),
                 tooltip=['Asset', alt.Tooltip('Allocation', format='.1%')]
-            ).properties(height=250)
-            st.altair_chart(c, use_container_width=True)
+            )
+            text = base.mark_text(align='left', dx=5).encode(
+                text=alt.Text('Allocation', format='.1%')
+            )
+            st.altair_chart((bars + text).properties(height=200), use_container_width=True)
 
             # POLICY RATE CHART (FROM CHART_DATA TAB)
             if has_chart_data:
@@ -311,11 +314,9 @@ if st.button("Run Full Analysis", type="primary"):
                 try:
                     raw_chart_data = chart_sheet.get_all_values()
                     chart_df = pd.DataFrame(raw_chart_data[1:], columns=raw_chart_data[0])
-                    # Ensure numeric columns
                     for col in chart_df.columns: 
                         if "Rate" in col or "OCR" in col: 
                             chart_df[col] = pd.to_numeric(chart_df[col], errors='coerce')
-                    
                     st.line_chart(chart_df.set_index(chart_df.columns[0]))
                 except Exception as e:
                     st.warning(f"Could not load Policy Rate Chart: {e}")
