@@ -371,7 +371,8 @@ if st.button("Run Full Analysis", type="primary"):
             sentiment = macro_sheet.acell('C11').value 
             sheet_target_raw = clean_number(macro_sheet.acell('C16').value)
             sheet_target = sheet_target_raw / 100 if sheet_target_raw > 1 else sheet_target_raw
-            regime_change = macro_sheet.acell('C23').value # Primary Signal
+            # PRIMARY REGIME CHANGE SIGNAL FROM C23
+            regime_change = macro_sheet.acell('C23').value 
 
             if not regime or regime.strip() in ['-', '—', '']: regime = "Regime Loading..."
                 
