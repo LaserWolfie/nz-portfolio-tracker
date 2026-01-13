@@ -168,28 +168,37 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Price Error: {e}"); st.stop()
 
-    # --- STEP 3: FUNDAMENTALS ---
+    # --- STEP 3: FUNDAMENTALS (HYBRID MODE) ---
     progress = st.progress(0); status = st.empty()
-    pe_ratios, div_yields, sectors = [], [], []
+    pe_ratios, div_yields = [], []
+    
+    # We now read 'Sector' directly from the DataFrame we loaded from Google Sheets
+    # Check if 'Sector' exists in the sheet, otherwise default to "Unknown"
+    if 'Sector' in portfolio.columns:
+        sectors = portfolio['Sector'].tolist()
+    else:
+        sectors = ["Unknown"] * len(ticker_list)
     
     for i, t in enumerate(ticker_list):
-        status.text(f"Analyzing {t}...")
+        status.text(f"Analyzing fundamentals for: {t}")
         progress.progress((i+1)/len(ticker_list))
         try:
+            # We ONLY ask Yahoo for P/E and Yield now (saves time!)
             info = yf.Ticker(t).info
-            sec = info.get('sector', 'Unknown')
+            
             pe = info.get('trailingPE', None)
             div = info.get('dividendYield', 0)
             if div is None: div = 0
             div_pct = div * 100 if (div > 0 and div < 0.30) else div
-            pe_ratios.append(pe); div_yields.append(div_pct); sectors.append(sec)
+            
+            pe_ratios.append(pe); div_yields.append(div_pct)
         except:
-            pe_ratios.append(None); div_yields.append(0); sectors.append("Unknown")
+            pe_ratios.append(None); div_yields.append(0)
             
     status.empty(); progress.empty()
     portfolio['P/E Ratio'] = pe_ratios
     portfolio['Div Yield %'] = div_yields
-    portfolio['Sector'] = sectors
+    portfolio['Sector'] = sectors # <--- Uses the column from Google Sheets
 
     # --- CALCULATIONS ---
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
