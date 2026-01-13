@@ -4,6 +4,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import matplotlib.pyplot as plt
+import altair as alt
 import numpy as np
 from datetime import datetime
 import time
@@ -16,18 +17,23 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Primary Signal:** "Regime Change" (Cell C23).
-    * **Context:** "Current Regime" (Cell C3) & "Composite Score" (Cell C5).
-    * **Allocation:** Pulls target weights for Equities, Bonds, Alts, and Cash (Section 4).
+    * **Regime Signal (Cell C23):** Primary cycle indicator (e.g., "Risk-On").
+    * **Current Regime (Cell C3):** The broader economic state (e.g., "Expansion").
+    * **Strategy Toggles:**
+        * *Cycle Purist:* Follows your spreadsheet's 15% Equity target exactly.
+        * *Momentum Chaser:* Ignores "Euphoria" if Macro Score > 0 (Target: 70%).
+        * *Wealth Shield:* Caps equity at 35% (or 10% if Euphoric).
     
     **2. The "Hybrid" Data Engine:**
-    * **Data:** Combines Yahoo Finance live data with your manual Sheet targets (Column AB).
-    * **Safety:** Monitors Volume (1.5x spikes) and Liquidity (<$50k/day).
+    * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
+    * **Liquidity:** Flags stocks trading <$50k/day.
+    * **Volume:** Alerts if trading volume > 1.5x the 65-day average.
     """)
 
 # --- CONFIGURATION ---
 SHEET_NAME = "Share Portfolio" 
 HISTORY_TAB_NAME = "History"
+CHART_TAB_NAME = "chart_data"  # New tab for raw policy rate data
 BENCHMARK_TICKER = "^NZ50"
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
@@ -51,7 +57,7 @@ try:
         
     client = gspread.authorize(creds)
     
-    # 1. Connect to Portfolio
+    # 1. Open Portfolio
     spreadsheet = client.open(SHEET_NAME)
     sheet = spreadsheet.worksheet("Share Portfolio")
     
@@ -61,14 +67,23 @@ try:
         st.error(f"⚠️ Could not find a tab named '{HISTORY_TAB_NAME}'. Please create it.")
         st.stop()
         
-    # 2. Connect to Macro Sheet
+    # 2. Open Macro Sheet
     try:
         macro_spreadsheet = client.open_by_url(MACRO_SHEET_URL)
         macro_sheet = macro_spreadsheet.worksheet("Dashboard")
+        
+        # Try to open chart_data tab
+        try:
+            chart_sheet = macro_spreadsheet.worksheet(CHART_TAB_NAME)
+            has_chart_data = True
+        except:
+            has_chart_data = False
+            
         has_macro = True
     except Exception as e:
         st.sidebar.warning(f"Macro Sheet Link Failed: {e}")
         has_macro = False
+        has_chart_data = False
     
     # --- DATA LOADING ---
     all_values = sheet.get_all_values()
@@ -76,13 +91,7 @@ try:
     cleaned_headers = [str(h).strip() for h in raw_headers]
     df = pd.DataFrame(all_values[1:], columns=cleaned_headers)
     
-    required_cols = ['Ticker', 'Shares', 'Purchase Price']
-    for col in required_cols:
-        if col not in df.columns:
-            st.error(f"❌ Missing column: '{col}'. Check your sheet headers.")
-            st.stop()
-            
-    # SMART MAPPING
+    # Smart Mapping
     col_map = {
         'Market Cap': next((c for c in df.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in df.columns if 'Target' in c), 'Analyst Target'),
@@ -93,20 +102,14 @@ try:
         'Sector': next((c for c in df.columns if 'Sector' in c), 'Sector')
     }
 
-    portfolio = df.copy()
-    portfolio = portfolio[portfolio['Ticker'] != '']
+    portfolio = df[df['Ticker'] != ''].copy()
 
-    # --- CLEANING FUNCTIONS ---
     def clean_number(x):
-        """Robust cleaner"""
         if pd.isna(x) or x == '' or str(x).strip() in ['-', 'None', 'nan', 'N/A', '—']: return float('nan')
-        if isinstance(x, (int, float)): return float(x)
-        
         s = str(x).upper().replace(',', '').replace('$', '').replace(' ', '')
         multiplier = 1
         if 'M' in s: multiplier = 1_000_000; s = s.replace('M', '')
         elif 'B' in s: multiplier = 1_000_000_000; s = s.replace('B', '')
-        
         s = s.replace('X', '').replace('%', '')
         try: return float(s) * multiplier
         except: return float('nan')
@@ -130,18 +133,7 @@ try:
         return ticker
 
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
-
     st.sidebar.success("✅ Sync Successful!")
-    
-    try:
-        hist_data = history_sheet.get_all_values()
-        if len(hist_data) > 1:
-            hist_df = pd.DataFrame(hist_data[1:], columns=hist_data[0])
-            hist_df['Date'] = pd.to_datetime(hist_df['Date'])
-            hist_df['Value'] = pd.to_numeric(hist_df['Value'])
-            st.sidebar.subheader("📈 Wealth Trend")
-            st.sidebar.line_chart(hist_df.set_index('Date')['Value'])
-    except: pass 
 
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
@@ -151,7 +143,6 @@ except Exception as e:
 force_fresh = st.checkbox("Force Fresh Data (Ignore Sheet)", value=False)
 
 if st.button("Run Full Analysis", type="primary"):
-    
     ticker_list = portfolio['Yahoo_Ticker'].tolist()
     
     # 1. FETCH PRICE & VOLUME
@@ -168,7 +159,6 @@ if st.button("Run Full Analysis", type="primary"):
                     prev = float(df_t['Close'].iloc[-2])
                     p30 = float(df_t['Close'].iloc[-22])
                     p1y = float(df_t['Close'].iloc[0])
-                    
                     vol_now = float(df_t['Volume'].iloc[-1])
                     vol_avg = df_t['Volume'].iloc[-65:].mean()
                     
@@ -186,7 +176,6 @@ if st.button("Run Full Analysis", type="primary"):
             portfolio['Price 1y'] = p1y_prices
             portfolio['Vol Ratio'] = vol_ratios
             portfolio['Daily Liquidity'] = daily_liquidities
-            
         except Exception as e:
             st.error(f"Data Error: {e}")
 
@@ -245,8 +234,6 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Total Gain $'] = portfolio['Market Value'] - portfolio['Cost Basis']
     portfolio['Total Gain %'] = (portfolio['Total Gain $'] / portfolio['Cost Basis']) * 100
     portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
-    
-    # Heatmap Calcs
     portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
     portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
@@ -263,13 +250,13 @@ if st.button("Run Full Analysis", type="primary"):
             history_sheet.append_row([today, total_val])
     except: pass
 
-    # --- MACRO STRATEGY ENGINE (COMPLETE) ---
+    # --- MACRO STRATEGY ENGINE (UPDATED) ---
     if has_macro:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         try:
             # SECTION 1 & 5: REGIME
-            regime = macro_sheet.acell('C3').value 
-            regime_change = macro_sheet.acell('C23').value 
+            regime = macro_sheet.acell('C3').value # "Expansion"
+            regime_change = macro_sheet.acell('C23').value # "Risk-On..."
             
             # SECTION 2: SCORE
             score_val = macro_sheet.acell('C5').value
@@ -295,22 +282,43 @@ if st.button("Run Full Analysis", type="primary"):
             else:
                 logic_msg = "✅ Following Cycle Model exactly."
 
-            # DISPLAY METRICS
+            # METRICS DISPLAY
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Regime Change", regime_change, f"Current: {regime}")
-            m2.metric("Composite Score", f"{score}", "Range: -5 to +5")
+            m1.metric("Regime Signal (C23)", regime_change, f"Macro: {regime}") #
+            m2.metric("Composite Score", f"{score}", "Range: -5 (Restrictive) to +5 (Supportive)")
             m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
             m4.metric("Equity Target", f"{target_pct*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
-            
             st.info(f"**Strategy Logic:** {logic_msg}")
             
-            # ASSET ALLOCATION VISUAL (SECTION 4)
+            # ASSET ALLOCATION CHART (FIXED Y-AXIS PERCENTAGE)
             st.caption("🎯 System Target Asset Allocation (Section 4)")
-            alloc_data = pd.DataFrame({
+            alloc_df = pd.DataFrame({
                 "Asset": ["Equities", "Bonds", "Alternatives", "Cash"],
-                "Target": [alloc_equity, alloc_bonds, alloc_alts, alloc_cash]
+                "Allocation": [alloc_equity, alloc_bonds, alloc_alts, alloc_cash]
             })
-            st.bar_chart(alloc_data.set_index("Asset"), height=200)
+            
+            c = alt.Chart(alloc_df).mark_bar().encode(
+                x=alt.X('Asset', sort=None),
+                y=alt.Y('Allocation', axis=alt.Axis(format='%')), # Formats axis as 0% - 100%
+                color=alt.Color('Asset', legend=None),
+                tooltip=['Asset', alt.Tooltip('Allocation', format='.1%')]
+            ).properties(height=250)
+            st.altair_chart(c, use_container_width=True)
+
+            # POLICY RATE CHART (FROM CHART_DATA TAB)
+            if has_chart_data:
+                st.subheader("📉 Policy Rates (US vs NZ)")
+                try:
+                    raw_chart_data = chart_sheet.get_all_values()
+                    chart_df = pd.DataFrame(raw_chart_data[1:], columns=raw_chart_data[0])
+                    # Ensure numeric columns
+                    for col in chart_df.columns: 
+                        if "Rate" in col or "OCR" in col: 
+                            chart_df[col] = pd.to_numeric(chart_df[col], errors='coerce')
+                    
+                    st.line_chart(chart_df.set_index(chart_df.columns[0]))
+                except Exception as e:
+                    st.warning(f"Could not load Policy Rate Chart: {e}")
 
         except Exception as e:
             st.warning(f"Macro Sync Issue: {e}")
