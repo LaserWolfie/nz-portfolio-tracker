@@ -12,14 +12,7 @@ import time
 st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
 st.title("🥝 NZ Portfolio Analyzer")
 
-# --- SIDEBAR & EXPLANATION ---
-st.sidebar.header("🎛️ Strategy Engine")
-strategy_mode = st.sidebar.radio(
-    "Select Strategy:",
-    ["Cycle Purist (Default)", "Momentum Chaser (Growth)", "Wealth Shield (Defensive)"],
-    help="Purist follows your sheet. Momentum ignores 'Euphoria' warnings. Shield caps risk."
-)
-
+# --- DASHBOARD EXPLANATION ---
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     * **Macro Signal:** Pulled directly from your Cycle Model (Cell C23).
@@ -34,6 +27,14 @@ HISTORY_TAB_NAME = "History"
 BENCHMARK_TICKER = "^NZ50"
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
+# --- SIDEBAR STRATEGY TOGGLE ---
+st.sidebar.header("🎛️ Strategy Engine")
+strategy_mode = st.sidebar.radio(
+    "Select Strategy:",
+    ["Cycle Purist (Default)", "Momentum Chaser (Growth)", "Wealth Shield (Defensive)"],
+    help="Purist follows your sheet. Momentum ignores 'Euphoria' warnings. Shield caps risk."
+)
+
 # --- CONNECT TO GOOGLE SHEETS ---
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -46,17 +47,17 @@ try:
         
     client = gspread.authorize(creds)
     
-    # 1. Open Portfolio
+    # 1. Connect to Portfolio
     spreadsheet = client.open(SHEET_NAME)
     sheet = spreadsheet.worksheet("Share Portfolio")
     
     try:
         history_sheet = spreadsheet.worksheet(HISTORY_TAB_NAME)
     except:
-        st.error(f"⚠️ Could not find a tab named '{HISTORY_TAB_NAME}'.")
+        st.error(f"⚠️ Could not find a tab named '{HISTORY_TAB_NAME}'. Please create it.")
         st.stop()
-
-    # 2. Open Macro Sheet
+        
+    # 2. Connect to Macro Sheet
     try:
         macro_spreadsheet = client.open_by_url(MACRO_SHEET_URL)
         macro_sheet = macro_spreadsheet.worksheet("Dashboard")
@@ -92,7 +93,6 @@ try:
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     
-    # Pre-fill Analyst Target from sheet if exists
     if col_map['Analyst Target'] in portfolio.columns:
         portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     else:
@@ -100,11 +100,13 @@ try:
 
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price']) 
 
-    def fix_ticker(t):
-        t = str(t).strip().upper()
-        if 'ASX:' in t: return t.replace('ASX:', '') + '.AX'
-        if 'NZE:' in t: return t.replace('NZE:', '') + '.NZ'
-        return t + '.NZ' if '.' not in t else t
+    def fix_ticker(ticker):
+        ticker = str(ticker).strip().upper()
+        if ":" in ticker:
+            clean_code = ticker.split(":")[-1]
+            if "ASX" in ticker: return clean_code + ".AX"
+            else: return clean_code + ".NZ"
+        return ticker
 
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     st.sidebar.success("✅ Sync Successful")
@@ -113,10 +115,11 @@ except Exception as e:
     st.error(f"Connection Error: {e}")
     st.stop()
 
-# --- MAIN ENGINE ---
-force_fresh = st.checkbox("Force Fresh Data", value=False)
+# --- MAIN DASHBOARD ---
+force_fresh = st.checkbox("Force Fresh Data (Ignore Sheet)", value=False)
 
 if st.button("Run Full Analysis", type="primary"):
+    
     ticker_list = portfolio['Yahoo_Ticker'].tolist()
     
     # 1. FETCH PRICE & VOLUME
@@ -155,7 +158,7 @@ if st.button("Run Full Analysis", type="primary"):
         except Exception as e:
             st.error(f"Market Data Error: {e}")
 
-    # 2. HYBRID FETCH (THE MISSING LINK RESTORED)
+    # 2. HYBRID FETCH (DATA FILLING)
     progress = st.progress(0)
     final_pe, final_div, final_mcap, final_upside, final_targets = [], [], [], [], []
     final_52_lo, final_52_hi = [], []
@@ -199,7 +202,7 @@ if st.button("Run Full Analysis", type="primary"):
         else:
             final_upside.append(float('nan'))
 
-    # ASSIGN COLUMNS (CRITICAL STEP)
+    # ASSIGN COLUMNS (CRITICAL STEP - PREVENTS KEYERROR)
     portfolio['P/E Ratio'] = final_pe
     portfolio['Div Yield %'] = final_div
     portfolio['Market Cap'] = final_mcap
@@ -215,9 +218,12 @@ if st.button("Run Full Analysis", type="primary"):
     portfolio['Total Gain $'] = portfolio['Market Value'] - portfolio['Cost Basis']
     portfolio['Total Gain %'] = (portfolio['Total Gain $'] / portfolio['Cost Basis']) * 100
     portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
+    
+    # Calculate % Changes for Heatmap
     portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
     portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
+    
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
 
     total_val = portfolio['Market Value'].sum()
@@ -286,6 +292,7 @@ if st.button("Run Full Analysis", type="primary"):
         * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
         * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
         * **Skellerup (SKL):** FY26 Guidance upgraded.
+        * **A2 Milk (ATM):** Upgraded Revenue Guidance.
         * **Macro:** Dairy prices recovering (+6.3%).
         """)
         
@@ -305,22 +312,27 @@ if st.button("Run Full Analysis", type="primary"):
     k3.metric("Today's Gain", f"${portfolio['Day Change $'].sum():,.2f}")
     k4.metric("Est. Annual Income", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # HOLDINGS TABLE
+    # HOLDINGS TABLE (RESTORED HEATMAPS)
     display_df = portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', '52W Low', '52W High', 'Day Change %', '30D %', '1Y %', 'Vol Ratio', 'Daily Liquidity', 'Total Gain %', 'P/E Ratio', 'Div Yield %', 'Market Value']].copy()
     
     st.dataframe(
         display_df.style.format({
             "Current Price": "${:.2f}", "Market Value": "${:,.0f}", "Market Cap": "${:,.0f}",
             "Analyst Upside": "{:+.2f}%", "Total Gain %": "{:+.2f}%", "Day Change %": "{:+.2f}%",
-            "Div Yield %": "{:.2f}%", "Vol Ratio": "{:.1f}x", "Daily Liquidity": "${:,.0f}"
+            "30D %": "{:+.2f}%", "1Y %": "{:+.2f}%", "Div Yield %": "{:.2f}%",
+            "Vol Ratio": "{:.1f}x", "Daily Liquidity": "${:,.0f}"
         }, na_rep="-")
         .background_gradient(subset=['Total Gain %'], cmap="RdYlGn", vmin=-50, vmax=50)
         .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-10, vmax=30)
+        .background_gradient(subset=['Day Change %'], cmap="RdYlGn", vmin=-5, vmax=5) # Restored Heatmap
+        .background_gradient(subset=['30D %'], cmap="RdYlGn", vmin=-10, vmax=10) # Restored Heatmap
+        .background_gradient(subset=['1Y %'], cmap="RdYlGn", vmin=-20, vmax=20) # Restored Heatmap
+        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8) # Restored Heatmap
         .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
         use_container_width=True, height=600
     )
 
-    # CHARTS
+    # CHARTS (RESTORED PIE BY STOCK)
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Composition by Sector")
@@ -331,10 +343,18 @@ if st.button("Run Full Analysis", type="primary"):
             st.pyplot(fig)
             
     with c2:
-        st.subheader("Total Return")
-        p_sort = portfolio.sort_values('Total Gain %', ascending=False)
+        st.subheader("Composition by Stock") # Restored
+        p_data = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False)
         fig2, ax2 = plt.subplots(figsize=(5,5)); fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-        cols = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
-        ax2.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=cols)
-        ax2.tick_params(axis='x', colors='white', rotation=90); ax2.tick_params(axis='y', colors='white')
+        ax2.pie(p_data, labels=p_data.index, autopct='%1.0f%%', textprops={'color':'white'})
         st.pyplot(fig2)
+
+    # TOTAL RETURN BAR CHART
+    st.markdown("---")
+    st.subheader("Total Return")
+    p_sort = portfolio.sort_values('Total Gain %', ascending=False)
+    fig3, ax3 = plt.subplots(figsize=(10,5)); fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
+    cols = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
+    ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=cols)
+    ax3.tick_params(axis='x', colors='white', rotation=45); ax3.tick_params(axis='y', colors='white')
+    st.pyplot(fig3)
