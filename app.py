@@ -342,9 +342,9 @@ if st.button("Run Full Analysis", type="primary"):
     if len(existing_history) < 2 or existing_history[-1][0] != today_str:
         history_sheet.append_row([today_str, total_value])
 
-    # --- INSIGHTS ---
+    # --- INSIGHTS & ALERTS ---
     st.subheader("💡 Key Portfolio Insights")
-    with st.expander("View Opportunities, Market Context & Volume", expanded=True):
+    with st.expander("View Opportunities, Market Context & Alerts", expanded=True):
         col_insight_1, col_insight_2 = st.columns(2)
         
         with col_insight_1:
@@ -363,21 +363,30 @@ if st.button("Run Full Analysis", type="primary"):
             else: st.success("No major valuation risks detected.")
 
         with col_insight_2:
-            st.markdown("##### 📰 Recent Market Context (Jan 2026)")
+            st.markdown("##### 📰 Market Context (Jan 2026)")
             st.info("""
-            * **Infratil (IFT):** Rated BBB+ Investment Grade (Dec '25). HY26 EBITDAF up 7%.
-            * **EBOS Group (EBO):** Underlying EBITDA up 7.5%. Growth in Southeast Asia.
-            * **Skellerup (SKL):** FY26 Guidance upgraded (Oct '25) to NPAT $55-60m.
-            * **A2 Milk (ATM):** FY26 Revenue Guidance upgraded (Nov '25).
-            * **Macro:** NZ inflation tracking firmer; dairy prices +6.3% in Jan '26 auction.
+            * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
+            * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
+            * **Skellerup (SKL):** FY26 Guidance upgraded.
+            * **A2 Milk (ATM):** Upgraded Revenue Guidance.
+            * **Macro:** Dairy prices recovering (+6.3%).
             """)
             
-            st.markdown("##### 🔊 Volume Alerts")
+            st.markdown("##### 🔊 Volume & Liquidity Alerts")
+            # 1. Volume Spikes
             vol_spikes = portfolio[portfolio['Vol Ratio'] > 1.5].sort_values(by='Vol Ratio', ascending=False)
             if not vol_spikes.empty:
                 for _, r in vol_spikes.iterrows():
-                    st.warning(f"**{r['Ticker']}**: {r['Vol Ratio']:.1f}x Normal Volume")
-            else: st.caption("No unusual volume today.")
+                    st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x average)")
+            
+            # 2. Low Liquidity Warning
+            low_liq = portfolio[portfolio['Daily Liquidity'] < 50000].sort_values(by='Daily Liquidity')
+            if not low_liq.empty:
+                for _, r in low_liq.iterrows():
+                    st.error(f"**{r['Ticker']}**: Low Liquidity (${r['Daily Liquidity']:,.0f}/day). Hard to sell.")
+            
+            if vol_spikes.empty and low_liq.empty:
+                st.caption("✅ No volume or liquidity risks today.")
 
     st.markdown("---")
 
