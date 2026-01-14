@@ -23,7 +23,7 @@ with st.expander("📘 Dashboard Guide"):
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
     * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from your sheet (Column D).
-    * **Volume:** Indicators restored.
+    * **Volume:** 1.0x is normal. >1.5x is high.
     """)
 
 # --- CONFIGURATION ---
@@ -82,9 +82,9 @@ def fetch_data():
             macro_data['status'] = True
         except: macro_data['status'] = False
         
-        return df, macro_data, None
+        return df, macro_data, data, None
     except Exception as e:
-        return None, None, str(e)
+        return None, None, None, str(e)
 
 # --- CLEANING HELPERS ---
 def clean_number(x):
@@ -105,7 +105,7 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.rerun()
 
 # --- MAIN LOGIC ---
-df_raw, macro_data, error = fetch_data()
+df_raw, macro_data, raw_sheet_data, error = fetch_data()
 
 if error:
     st.error(f"Connection Error: {error}")
@@ -173,10 +173,7 @@ if df_raw is not None:
     portfolio = df_raw[df_raw['Ticker'] != ''].copy()
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     
-    # DYNAMIC COLUMN MAPPING (Ensures we find 'Current Price')
     col_map = {
-        'Current Price': next((c for c in portfolio.columns if 'Current' in c and 'Price' in c), 'Current Price'),
-        'Market Cap': next((c for c in portfolio.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in portfolio.columns if 'Target' in c), 'Analyst Target'),
         'P/E': next((c for c in portfolio.columns if 'P/E' in c), 'P/E'),
         'Div Yield': next((c for c in portfolio.columns if 'Div' in c), 'Div Yield'),
@@ -189,7 +186,7 @@ if df_raw is not None:
         portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price'])
 
-    # LIVE FETCH (Public Only)
+    # LIVE FETCH
     public_tickers = [t for t in portfolio['Yahoo_Ticker'].tolist() if "PRIVATE" not in t]
     
     @st.cache_data(ttl=900)
@@ -205,32 +202,23 @@ if df_raw is not None:
     for idx, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
         
-        # --- CASE 1: PRIVATE INVESTMENT (FIXED PRICE FETCH) ---
+        # --- CASE 1: PRIVATE INVESTMENT ---
         if "PRIVATE" in t:
-            # Look explicitly for the "Current Price" column (from mapping)
             manual_price = 0
-            # Try getting value from mapped column
             try:
-                val = row.get(col_map['Current Price'])
-                manual_price = clean_number(val)
+                # Force fetch from Column D (Index 3) using raw data lookup
+                raw_row = next(r for r in raw_sheet_data if r[0] == row['Ticker']) 
+                if len(raw_row) > 3: 
+                    manual_price = clean_number(raw_row[3])
             except: pass
             
-            # If still 0/NaN, fallback to Purchase Price
-            if pd.isna(manual_price) or manual_price == 0:
-                manual_price = clean_number(row['Purchase Price'])
+            if manual_price == 0: manual_price = clean_number(row['Purchase Price'])
 
-            res['curr'].append(manual_price)
-            res['prev'].append(manual_price) 
-            res['p30'].append(manual_price)
-            res['p1y'].append(manual_price)
-            res['vol'].append(0)
-            res['liq'].append(0)
-            
-            # Fundamentals
-            res['pe'].append(0)
-            res['div'].append(clean_number(row.get(col_map['Div Yield'])))
-            res['cap'].append(0)
-            res['upside'].append(0)
+            res['curr'].append(manual_price); res['prev'].append(manual_price) 
+            res['p30'].append(manual_price); res['p1y'].append(manual_price)
+            res['vol'].append(0); res['liq'].append(0)
+            res['pe'].append(0); res['div'].append(clean_number(row.get(col_map['Div Yield'])))
+            res['cap'].append(0); res['upside'].append(0)
             
         # --- CASE 2: PUBLIC STOCK ---
         else:
@@ -249,7 +237,6 @@ if df_raw is not None:
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
             
-            # Fundamentals
             sheet_pe = clean_number(row.get(col_map['P/E']))
             sheet_div = clean_number(row.get(col_map['Div Yield']))
             
@@ -272,7 +259,7 @@ if df_raw is not None:
             if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
             else: res['upside'].append(float('nan'))
 
-    # Assign
+    # Assign & Calculate
     portfolio['Current Price'] = res['curr']
     portfolio['Previous Price'] = res['prev']
     portfolio['Price 30d'] = res['p30']
@@ -284,7 +271,6 @@ if df_raw is not None:
     portfolio['Market Cap'] = res['cap']
     portfolio['Analyst Upside'] = res['upside']
     
-    # Calculations
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
     portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
     portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
@@ -293,7 +279,33 @@ if df_raw is not None:
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
+    # --- KEY INSIGHTS (RESTORED CONTEXT) ---
+    st.subheader("💡 Key Portfolio Insights")
+    c_ins1, c_ins2 = st.columns(2)
+    with c_ins1:
+        st.markdown("##### 🚀 Analyst Opportunities")
+        opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
+        for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
+        
+    with c_ins2:
+        st.markdown("##### 📰 Market Context (Jan 2026)")
+        st.info("""
+        * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
+        * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
+        * **Skellerup (SKL):** FY26 Guidance upgraded.
+        * **A2 Milk (ATM):** Upgraded Revenue Guidance.
+        * **Macro:** Dairy prices recovering (+6.3%).
+        """)
+        
+        st.markdown("##### 🔊 Volume & Liquidity")
+        vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
+        if not vol_alerts.empty:
+            for _, r in vol_alerts.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x)")
+        else:
+            st.success("✅ No Volume Spikes Today")
+
     # --- DISPLAY ---
+    st.markdown("---")
     st.subheader("📊 Portfolio Health")
     total_val = portfolio['Market Value'].sum()
     k1, k2, k3 = st.columns(3)
@@ -301,8 +313,8 @@ if df_raw is not None:
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # Table (RESTORED VOL RATIO)
-    display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Vol Ratio', 'Total Gain %']
+    # Table
+    display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
     
     st.dataframe(
         portfolio[display_cols].style.format({
