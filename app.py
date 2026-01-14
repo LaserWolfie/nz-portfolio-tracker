@@ -22,8 +22,8 @@ with st.expander("📘 Dashboard Guide"):
     
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
-    * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from your sheet (Column D).
-    * **Volume:** 1.0x is normal. >1.5x is high.
+    * **Private Funds:** Uses the **'Current Price'** column from your sheet.
+    * **Wealth Tracker:** Automatically logs daily total value to the 'History' tab.
     """)
 
 # --- CONFIGURATION ---
@@ -58,7 +58,13 @@ def fetch_data():
         data = sheet.get_all_values()
         df = pd.DataFrame(data[1:], columns=[str(h).strip() for h in data[0]])
         
-        # 2. Macro Data
+        # 2. History Data (For Wealth Tracker)
+        try:
+            hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
+            hist_data = hist_sheet.get_all_values()
+        except: hist_data = []
+
+        # 3. Macro Data
         macro_data = {}
         try:
             m_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet("Dashboard")
@@ -82,9 +88,30 @@ def fetch_data():
             macro_data['status'] = True
         except: macro_data['status'] = False
         
-        return df, macro_data, data, None
+        return df, macro_data, data, hist_data, None
     except Exception as e:
-        return None, None, None, str(e)
+        return None, None, None, None, str(e)
+
+# --- HISTORY UPDATER (Non-Cached) ---
+def update_history_log(current_val):
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        if "gcp_service_account" in st.secrets:
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+        else:
+            creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        client = gspread.authorize(creds)
+        h_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        existing = h_sheet.get_all_values()
+        
+        # Check if last row is today
+        if not existing or existing[-1][0] != today:
+            h_sheet.append_row([today, current_val])
+            return True
+    except: return False
+    return False
 
 # --- CLEANING HELPERS ---
 def clean_number(x):
@@ -105,7 +132,7 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.rerun()
 
 # --- MAIN LOGIC ---
-df_raw, macro_data, raw_sheet_data, error = fetch_data()
+df_raw, macro_data, raw_sheet_data, hist_raw, error = fetch_data()
 
 if error:
     st.error(f"Connection Error: {error}")
@@ -180,6 +207,14 @@ if df_raw is not None:
         'Sector': next((c for c in portfolio.columns if 'Sector' in c), 'Sector')
     }
     
+    # DYNAMICALLY FIND "CURRENT PRICE" COLUMN INDEX
+    try:
+        headers = raw_sheet_data[0]
+        # Find index of 'Current Price' or 'Price'
+        price_col_idx = next(i for i, h in enumerate(headers) if 'Current' in str(h) and 'Price' in str(h))
+    except:
+        price_col_idx = -1 # Not found
+    
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     if col_map['Analyst Target'] in portfolio.columns:
@@ -205,12 +240,13 @@ if df_raw is not None:
         # --- CASE 1: PRIVATE INVESTMENT ---
         if "PRIVATE" in t:
             manual_price = 0
-            try:
-                # Force fetch from Column D (Index 3) using raw data lookup
-                raw_row = next(r for r in raw_sheet_data if r[0] == row['Ticker']) 
-                if len(raw_row) > 3: 
-                    manual_price = clean_number(raw_row[3])
-            except: pass
+            if price_col_idx != -1:
+                try:
+                    # Lookup row in raw data (match by ticker)
+                    raw_row = next(r for r in raw_sheet_data if r[0] == row['Ticker'])
+                    if len(raw_row) > price_col_idx:
+                        manual_price = clean_number(raw_row[price_col_idx])
+                except: pass
             
             if manual_price == 0: manual_price = clean_number(row['Purchase Price'])
 
@@ -259,7 +295,7 @@ if df_raw is not None:
             if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
             else: res['upside'].append(float('nan'))
 
-    # Assign & Calculate
+    # Assign
     portfolio['Current Price'] = res['curr']
     portfolio['Previous Price'] = res['prev']
     portfolio['Price 30d'] = res['p30']
@@ -271,6 +307,7 @@ if df_raw is not None:
     portfolio['Market Cap'] = res['cap']
     portfolio['Analyst Upside'] = res['upside']
     
+    # Calculations
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
     portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
     portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
@@ -279,99 +316,117 @@ if df_raw is not None:
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
-    # --- KEY INSIGHTS (RESTORED CONTEXT) ---
-    st.subheader("💡 Key Portfolio Insights")
-    c_ins1, c_ins2 = st.columns(2)
-    with c_ins1:
-        st.markdown("##### 🚀 Analyst Opportunities")
-        opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
-        for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
-        
-    with c_ins2:
-        st.markdown("##### 📰 Market Context (Jan 2026)")
-        st.info("""
-        * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
-        * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
-        * **Skellerup (SKL):** FY26 Guidance upgraded.
-        * **A2 Milk (ATM):** Upgraded Revenue Guidance.
-        * **Macro:** Dairy prices recovering (+6.3%).
-        """)
-        
-        st.markdown("##### 🔊 Volume & Liquidity")
-        vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
-        if not vol_alerts.empty:
-            for _, r in vol_alerts.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x)")
-        else:
-            st.success("✅ No Volume Spikes Today")
-
-    # --- DISPLAY ---
-    st.markdown("---")
+    # --- DISPLAY METRICS ---
     st.subheader("📊 Portfolio Health")
     total_val = portfolio['Market Value'].sum()
+    
+    # Update History if new day
+    if update_history_log(total_val):
+        st.toast("✅ Wealth History Updated for Today!")
+
     k1, k2, k3 = st.columns(3)
     k1.metric("Portfolio Value", f"${total_val:,.2f}")
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # Table
-    display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
+    # --- TABS FOR VIEWING ---
+    tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
-    st.dataframe(
-        portfolio[display_cols].style.format({
-            "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
-            "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
-            "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", 
-            "P/E Ratio": "{:.1f}", "Vol Ratio": "{:.1f}x"
-        })
-        .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
-        .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
-        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
-        .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
-        use_container_width=True, height=500
-    )
+    with tab1:
+        # TABLE
+        display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
+        
+        st.dataframe(
+            portfolio[display_cols].style.format({
+                "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
+                "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
+                "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", 
+                "P/E Ratio": "{:.1f}", "Vol Ratio": "{:.1f}x"
+            })
+            .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
+            .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
+            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
+            use_container_width=True, height=500
+        )
 
-    # Charts
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption("Sector Allocation")
-        if 'Sector' in portfolio.columns:
-            s_counts = portfolio.groupby('Sector')['Market Value'].sum()
-            fig, ax = plt.subplots(figsize=(5,5))
-            fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-            ax.pie(s_counts, labels=s_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
-            st.pyplot(fig)
-    
-    with c2:
-        st.caption("Holdings Allocation")
-        h_counts = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False).head(10)
-        fig2, ax2 = plt.subplots(figsize=(5,5))
-        fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-        ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
-        st.pyplot(fig2)
+        # INSIGHTS
+        st.subheader("💡 Alerts & Context")
+        c_ins1, c_ins2 = st.columns(2)
+        with c_ins1:
+            st.markdown("##### 🚀 Analyst Opportunities")
+            opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
+            for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
+            
+        with c_ins2:
+            st.markdown("##### 📰 Market Context (Jan 2026)")
+            st.info("""
+            * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
+            * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
+            * **Skellerup (SKL):** FY26 Guidance upgraded.
+            * **A2 Milk (ATM):** Upgraded Revenue Guidance.
+            * **Macro:** Dairy prices recovering (+6.3%).
+            """)
+            vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
+            if not vol_alerts.empty:
+                for _, r in vol_alerts.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x)")
+            else: st.success("✅ No Volume Spikes Today")
 
-    # Return Bar Chart
-    st.markdown("---")
-    st.subheader("Total Return by Stock")
-    p_sort = portfolio.sort_values('Total Gain %', ascending=False)
-    fig3, ax3 = plt.subplots(figsize=(10, 5))
-    fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
-    colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
-    ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
-    ax3.set_ylabel("Total Gain %", color="white")
-    ax3.tick_params(axis='x', colors='white', rotation=45)
-    ax3.tick_params(axis='y', colors='white')
-    ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
-    ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
-    st.pyplot(fig3)
+        # CHARTS
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Sector Allocation")
+            if 'Sector' in portfolio.columns:
+                s_counts = portfolio.groupby('Sector')['Market Value'].sum()
+                fig, ax = plt.subplots(figsize=(5,5))
+                fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+                ax.pie(s_counts, labels=s_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
+                st.pyplot(fig)
+        
+        with c2:
+            st.caption("Holdings Allocation")
+            h_counts = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False).head(10)
+            fig2, ax2 = plt.subplots(figsize=(5,5))
+            fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
+            ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
+            st.pyplot(fig2)
 
-    # Policy Rate Chart
-    if macro_data.get('chart'):
+        # Returns
         st.markdown("---")
-        st.subheader("📉 Policy Rates (US vs NZ)")
-        try:
-            c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
-            c_df.set_index(c_df.columns[0], inplace=True)
-            for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
-            st.line_chart(c_df)
-        except: 
-            st.warning("⚠️ Could not render chart from 'chart_data' tab.")
+        st.subheader("Total Return by Stock")
+        p_sort = portfolio.sort_values('Total Gain %', ascending=False)
+        fig3, ax3 = plt.subplots(figsize=(10, 5))
+        fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
+        colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
+        ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
+        ax3.set_ylabel("Total Gain %", color="white")
+        ax3.tick_params(axis='x', colors='white', rotation=45)
+        ax3.tick_params(axis='y', colors='white')
+        ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
+        ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
+        st.pyplot(fig3)
+
+        # Policy Chart
+        if macro_data.get('chart'):
+            st.markdown("---")
+            st.subheader("📉 Policy Rates (US vs NZ)")
+            try:
+                c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
+                c_df.set_index(c_df.columns[0], inplace=True)
+                for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
+                st.line_chart(c_df)
+            except: pass
+
+    # --- WEALTH HISTORY TAB ---
+    with tab2:
+        st.subheader("📈 Wealth History")
+        if hist_raw and len(hist_raw) > 1:
+            try:
+                h_df = pd.DataFrame(hist_raw[1:], columns=hist_raw[0])
+                h_df['Date'] = pd.to_datetime(h_df['Date'])
+                h_df['Value'] = pd.to_numeric(h_df['Value'])
+                st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
+            except Exception as e:
+                st.warning(f"Could not load history: {e}")
+        else:
+            st.info("No history data found. Today's value has been logged.")
