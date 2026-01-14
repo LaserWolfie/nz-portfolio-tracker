@@ -21,8 +21,9 @@ with st.expander("📘 Dashboard Guide"):
     * **Current Regime (C2):** The broader economic state (e.g., "Expansion").
     
     **2. The "Hybrid" Data Engine:**
-    * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
-    * **Volume Ratio:** 1.0x is normal. >1.5x triggers an alert.
+    * **Public Stocks:** Live data from Yahoo Finance.
+    * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from your sheet.
+    * **Analyst Targets:** Prioritizes manual targets (Column AB).
     """)
 
 # --- CONFIGURATION ---
@@ -61,16 +62,22 @@ def fetch_data():
         macro_data = {}
         try:
             m_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet("Dashboard")
-            macro_data['regime_c2'] = m_sheet.acell('C2').value  # "Expansion"
-            macro_data['score'] = m_sheet.acell('C5').value      # "4"
-            macro_data['sentiment'] = m_sheet.acell('C12').value # "Euphoric"
-            macro_data['signal'] = m_sheet.acell('C23').value    # "Risk-On..."
+            macro_data['regime_c2'] = m_sheet.acell('C2').value
+            macro_data['score'] = m_sheet.acell('C5').value
+            macro_data['sentiment'] = m_sheet.acell('C12').value
+            macro_data['signal'] = m_sheet.acell('C23').value
             
             # Allocation
             macro_data['eq'] = m_sheet.acell('C16').value
             macro_data['bd'] = m_sheet.acell('C17').value
             macro_data['al'] = m_sheet.acell('C18').value
             macro_data['ca'] = m_sheet.acell('C19').value
+            
+            # Chart Data
+            try:
+                c_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet(CHART_TAB_NAME)
+                macro_data['chart'] = c_sheet.get_all_values()
+            except: macro_data['chart'] = None
             
             macro_data['status'] = True
         except: macro_data['status'] = False
@@ -88,6 +95,7 @@ def clean_number(x):
 
 def fix_ticker(t):
     t = str(t).strip().upper()
+    if "PRIVATE" in t: return t # Don't touch private tickers
     if 'ASX:' in t: return t.replace('ASX:', '') + '.AX'
     if 'NZE:' in t: return t.replace('NZE:', '') + '.NZ'
     return t + '.NZ' if '.' not in t else t
@@ -165,7 +173,9 @@ if df_raw is not None:
     portfolio = df_raw[df_raw['Ticker'] != ''].copy()
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     
+    # Identify Columns dynamically
     col_map = {
+        'Current Price': next((c for c in portfolio.columns if 'Current' in c and 'Price' in c), None),
         'Market Cap': next((c for c in portfolio.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in portfolio.columns if 'Target' in c), 'Analyst Target'),
         'P/E': next((c for c in portfolio.columns if 'P/E' in c), 'P/E'),
@@ -179,26 +189,53 @@ if df_raw is not None:
         portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price'])
 
+    # LIVE FETCH (Public Only)
+    public_tickers = [t for t in portfolio['Yahoo_Ticker'].tolist() if "PRIVATE" not in t]
+    
     @st.cache_data(ttl=900)
     def get_live_prices(tickers):
+        if not tickers: return None
         return yf.download(tickers, period="1y", group_by='ticker', progress=False)
 
-    ticker_list = portfolio['Yahoo_Ticker'].tolist()
-    if ticker_list:
-        bulk_data = get_live_prices(ticker_list)
+    bulk_data = get_live_prices(public_tickers)
+    
+    # RESULT LISTS
+    res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
+    
+    for idx, row in portfolio.iterrows():
+        t = row['Yahoo_Ticker']
         
-        res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
-        
-        for idx, row in portfolio.iterrows():
-            t = row['Yahoo_Ticker']
+        # --- CASE 1: PRIVATE INVESTMENT ---
+        if "PRIVATE" in t:
+            # Use Manual Price from Sheet (Fallback to Purchase Price)
+            manual_price = 0
+            if col_map['Current Price'] and not pd.isna(clean_number(row[col_map['Current Price']])):
+                manual_price = clean_number(row[col_map['Current Price']])
+            else:
+                manual_price = clean_number(row['Purchase Price'])
+                
+            res['curr'].append(manual_price)
+            res['prev'].append(manual_price) # No history
+            res['p30'].append(manual_price)
+            res['p1y'].append(manual_price)
+            res['vol'].append(0)
+            res['liq'].append(0)
+            
+            # Manual Fundamentals
+            res['pe'].append(0)
+            res['div'].append(clean_number(row.get(col_map['Div Yield']))) # Manual Yield
+            res['cap'].append(0)
+            res['upside'].append(0)
+            
+        # --- CASE 2: PUBLIC STOCK ---
+        else:
             try:
-                df_t = bulk_data[t] if len(ticker_list) > 1 else bulk_data
+                df_t = bulk_data[t] if len(public_tickers) > 1 else bulk_data
                 closes = df_t['Close']
                 curr = float(closes.iloc[-1]) if len(closes) > 0 else 0
                 prev = float(closes.iloc[-2]) if len(closes) > 1 else curr
                 p30 = float(closes.iloc[-22]) if len(closes) > 22 else curr
                 p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
-                
                 v_now = float(df_t['Volume'].iloc[-1])
                 v_avg = df_t['Volume'].iloc[-65:].mean()
             except: curr=0; prev=0; p30=0; p1y=0; v_now=0; v_avg=0
@@ -207,6 +244,7 @@ if df_raw is not None:
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
             
+            # Fundamentals
             sheet_pe = clean_number(row.get(col_map['P/E']))
             sheet_div = clean_number(row.get(col_map['Div Yield']))
             
@@ -229,101 +267,92 @@ if df_raw is not None:
             if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
             else: res['upside'].append(float('nan'))
 
-        portfolio['Current Price'] = res['curr']
-        portfolio['Previous Price'] = res['prev']
-        portfolio['Price 30d'] = res['p30']
-        portfolio['Price 1y'] = res['p1y']
-        portfolio['Vol Ratio'] = res['vol']
-        portfolio['Daily Liquidity'] = res['liq']
-        portfolio['P/E Ratio'] = res['pe']
-        portfolio['Div Yield %'] = res['div']
-        portfolio['Market Cap'] = res['cap']
-        portfolio['Analyst Upside'] = res['upside']
-        
-        portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
-        portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
-        portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
-        portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
-        portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
-        portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
-        portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
+    # Assign
+    portfolio['Current Price'] = res['curr']
+    portfolio['Previous Price'] = res['prev']
+    portfolio['Price 30d'] = res['p30']
+    portfolio['Price 1y'] = res['p1y']
+    portfolio['Vol Ratio'] = res['vol']
+    portfolio['Daily Liquidity'] = res['liq']
+    portfolio['P/E Ratio'] = res['pe']
+    portfolio['Div Yield %'] = res['div']
+    portfolio['Market Cap'] = res['cap']
+    portfolio['Analyst Upside'] = res['upside']
+    
+    # Calculations
+    portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
+    portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
+    portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
+    portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
+    portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
+    portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
+    portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
-        # --- DISPLAY ---
-        st.subheader("📊 Portfolio Health")
-        total_val = portfolio['Market Value'].sum()
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Portfolio Value", f"${total_val:,.2f}")
-        k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
-        k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
+    # --- DISPLAY ---
+    st.subheader("📊 Portfolio Health")
+    total_val = portfolio['Market Value'].sum()
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Portfolio Value", f"${total_val:,.2f}")
+    k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
+    k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-        # TABLE: RESTORED VOL RATIO
-        display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Vol Ratio', 'Total Gain %']
-        
-        st.dataframe(
-            portfolio[display_cols].style.format({
-                "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
-                "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
-                "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", 
-                "P/E Ratio": "{:.1f}", "Vol Ratio": "{:.1f}x"
-            })
-            .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
-            .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
-            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
-            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
-            use_container_width=True, height=500
-        )
+    # Table
+    display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
+    
+    st.dataframe(
+        portfolio[display_cols].style.format({
+            "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
+            "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
+            "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", "P/E Ratio": "{:.1f}"
+        })
+        .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
+        .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
+        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+        use_container_width=True, height=500
+    )
 
-        # ALERTS: FIXED LOGIC
-        st.subheader("💡 Alerts")
-        c_ins1, c_ins2 = st.columns(2)
-        with c_ins1:
-            st.markdown("##### 🚀 Analyst Opportunities")
-            opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
-            for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
-            
-        with c_ins2:
-            st.markdown("##### 🔊 Volume & Liquidity")
-            vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
-            liq_alerts = portfolio[portfolio['Daily Liquidity'] < 50000]
-            
-            if not vol_alerts.empty:
-                for _, r in vol_alerts.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x)")
-            else:
-                st.success("✅ No Volume Spikes Today")
-                
-            if not liq_alerts.empty:
-                for _, r in liq_alerts.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity")
+    # Charts
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Sector Allocation")
+        if 'Sector' in portfolio.columns:
+            s_counts = portfolio.groupby('Sector')['Market Value'].sum()
+            fig, ax = plt.subplots(figsize=(5,5))
+            fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
+            ax.pie(s_counts, labels=s_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
+            st.pyplot(fig)
+    
+    with c2:
+        st.caption("Holdings Allocation")
+        h_counts = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False).head(10)
+        fig2, ax2 = plt.subplots(figsize=(5,5))
+        fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
+        ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
+        st.pyplot(fig2)
 
-        # CHARTS
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("Sector Allocation")
-            if 'Sector' in portfolio.columns:
-                s_counts = portfolio.groupby('Sector')['Market Value'].sum()
-                fig, ax = plt.subplots(figsize=(5,5))
-                fig.patch.set_facecolor('#0E1117'); ax.set_facecolor('#0E1117')
-                ax.pie(s_counts, labels=s_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
-                st.pyplot(fig)
-        
-        with c2:
-            st.caption("Holdings Allocation")
-            h_counts = portfolio.groupby('Ticker')['Market Value'].sum().sort_values(ascending=False).head(10)
-            fig2, ax2 = plt.subplots(figsize=(5,5))
-            fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
-            ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
-            st.pyplot(fig2)
+    # Return Bar Chart
+    st.markdown("---")
+    st.subheader("Total Return by Stock")
+    p_sort = portfolio.sort_values('Total Gain %', ascending=False)
+    fig3, ax3 = plt.subplots(figsize=(10, 5))
+    fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
+    colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
+    ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
+    ax3.set_ylabel("Total Gain %", color="white")
+    ax3.tick_params(axis='x', colors='white', rotation=45)
+    ax3.tick_params(axis='y', colors='white')
+    ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
+    ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
+    st.pyplot(fig3)
 
-        # TOTAL RETURN BAR CHART
+    # Policy Rate Chart
+    if macro_data.get('chart'):
         st.markdown("---")
-        st.subheader("Total Return by Stock")
-        p_sort = portfolio.sort_values('Total Gain %', ascending=False)
-        fig3, ax3 = plt.subplots(figsize=(10, 5))
-        fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
-        colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
-        ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
-        ax3.set_ylabel("Total Gain %", color="white")
-        ax3.tick_params(axis='x', colors='white', rotation=45)
-        ax3.tick_params(axis='y', colors='white')
-        ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
-        ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
-        st.pyplot(fig3)
+        st.subheader("📉 Policy Rates (US vs NZ)")
+        try:
+            c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
+            c_df.set_index(c_df.columns[0], inplace=True)
+            for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
+            st.line_chart(c_df)
+        except: 
+            st.warning("⚠️ Could not render chart from 'chart_data' tab.")
