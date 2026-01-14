@@ -22,7 +22,7 @@ with st.expander("📘 Dashboard Guide"):
     
     **2. The "Hybrid" Data Engine:**
     * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
-    * **Liquidity:** Flags stocks trading <$50k/day.
+    * **Volume Ratio:** 1.0x is normal. >1.5x triggers an alert.
     """)
 
 # --- CONFIGURATION ---
@@ -108,7 +108,6 @@ if df_raw is not None:
     if macro_data and macro_data['status']:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         
-        # Extract & Clean
         regime = macro_data.get('regime_c2', '-')
         signal = macro_data.get('signal', '-')
         score = float(macro_data['score']) if macro_data['score'] else 0.0
@@ -119,7 +118,6 @@ if df_raw is not None:
         al_tgt = clean_number(macro_data['al']) / 100
         ca_tgt = clean_number(macro_data['ca']) / 100
         
-        # Logic
         final_tgt = eq_tgt
         logic_msg = "✅ Following Cycle Model exactly."
         
@@ -136,7 +134,6 @@ if df_raw is not None:
                 final_tgt = min(eq_tgt, 0.35)
                 logic_msg = "🛡️ Defensive Cap active."
 
-        # Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Current Regime (C2)", regime, f"Signal: {signal}")
         m2.metric("Composite Score", f"{score}", "Range: -5 (Restrictive) to +5 (Supportive)")
@@ -144,8 +141,6 @@ if df_raw is not None:
         m4.metric("Equity Target", f"{final_tgt*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
         st.info(f"**Strategy Logic:** {logic_msg}")
         
-        # Horizontal Asset Allocation Chart
-        st.caption("🎯 System Target Asset Allocation")
         alloc_df = pd.DataFrame({
             "Asset": ["Equities", "Bonds", "Alternatives", "Cash"],
             "Allocation": [final_tgt, bd_tgt, al_tgt, ca_tgt]
@@ -184,7 +179,6 @@ if df_raw is not None:
         portfolio['Analyst Target'] = portfolio[col_map['Analyst Target']].apply(clean_number)
     portfolio = portfolio.dropna(subset=['Shares', 'Purchase Price'])
 
-    # LIVE FETCH
     @st.cache_data(ttl=900)
     def get_live_prices(tickers):
         return yf.download(tickers, period="1y", group_by='ticker', progress=False)
@@ -193,7 +187,6 @@ if df_raw is not None:
     if ticker_list:
         bulk_data = get_live_prices(ticker_list)
         
-        # Build Result Lists
         res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
         
         for idx, row in portfolio.iterrows():
@@ -201,7 +194,6 @@ if df_raw is not None:
             try:
                 df_t = bulk_data[t] if len(ticker_list) > 1 else bulk_data
                 closes = df_t['Close']
-                # Need robust closing price logic
                 curr = float(closes.iloc[-1]) if len(closes) > 0 else 0
                 prev = float(closes.iloc[-2]) if len(closes) > 1 else curr
                 p30 = float(closes.iloc[-22]) if len(closes) > 22 else curr
@@ -215,7 +207,6 @@ if df_raw is not None:
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
             
-            # Fundamentals (Yahoo + Sheet)
             sheet_pe = clean_number(row.get(col_map['P/E']))
             sheet_div = clean_number(row.get(col_map['Div Yield']))
             
@@ -227,7 +218,6 @@ if df_raw is not None:
                 y_cap = info.get('marketCap', 0)
             except: pass
             
-            # DIVIDEND FIX: If calculated yield > 50%, assume error and divide by 100
             final_div = y_div if y_div > 0 else sheet_div
             if not pd.isna(final_div) and final_div > 50: final_div = final_div / 100
             
@@ -239,7 +229,6 @@ if df_raw is not None:
             if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
             else: res['upside'].append(float('nan'))
 
-        # Assign Everything
         portfolio['Current Price'] = res['curr']
         portfolio['Previous Price'] = res['prev']
         portfolio['Price 30d'] = res['p30']
@@ -251,7 +240,6 @@ if df_raw is not None:
         portfolio['Market Cap'] = res['cap']
         portfolio['Analyst Upside'] = res['upside']
         
-        # Calculations
         portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
         portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
         portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
@@ -268,22 +256,45 @@ if df_raw is not None:
         k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
         k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-        # Table with Value ($) and P/E
-        display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
+        # TABLE: RESTORED VOL RATIO
+        display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Vol Ratio', 'Total Gain %']
         
         st.dataframe(
             portfolio[display_cols].style.format({
                 "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
                 "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
-                "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", "P/E Ratio": "{:.1f}"
+                "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", 
+                "P/E Ratio": "{:.1f}", "Vol Ratio": "{:.1f}x"
             })
             .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
             .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
-            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+            .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
             use_container_width=True, height=500
         )
 
-        # Charts (Restored)
+        # ALERTS: FIXED LOGIC
+        st.subheader("💡 Alerts")
+        c_ins1, c_ins2 = st.columns(2)
+        with c_ins1:
+            st.markdown("##### 🚀 Analyst Opportunities")
+            opps = portfolio[portfolio['Analyst Upside'] > 5].sort_values('Analyst Upside', ascending=False).head(3)
+            for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
+            
+        with c_ins2:
+            st.markdown("##### 🔊 Volume & Liquidity")
+            vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
+            liq_alerts = portfolio[portfolio['Daily Liquidity'] < 50000]
+            
+            if not vol_alerts.empty:
+                for _, r in vol_alerts.iterrows(): st.warning(f"**{r['Ticker']}**: High Volume ({r['Vol Ratio']:.1f}x)")
+            else:
+                st.success("✅ No Volume Spikes Today")
+                
+            if not liq_alerts.empty:
+                for _, r in liq_alerts.iterrows(): st.error(f"**{r['Ticker']}**: Low Liquidity")
+
+        # CHARTS
         c1, c2 = st.columns(2)
         with c1:
             st.caption("Sector Allocation")
@@ -302,20 +313,17 @@ if df_raw is not None:
             ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
             st.pyplot(fig2)
 
-        # Total Return Bar Chart (Green/Red)
+        # TOTAL RETURN BAR CHART
         st.markdown("---")
         st.subheader("Total Return by Stock")
         p_sort = portfolio.sort_values('Total Gain %', ascending=False)
         fig3, ax3 = plt.subplots(figsize=(10, 5))
         fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
-        
         colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
-        bars = ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
-        
+        ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
         ax3.set_ylabel("Total Gain %", color="white")
         ax3.tick_params(axis='x', colors='white', rotation=45)
         ax3.tick_params(axis='y', colors='white')
         ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
         ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
-        
         st.pyplot(fig3)
