@@ -18,12 +18,12 @@ with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
     * **Regime Signal (C23):** Primary cycle indicator.
-    * **Current Regime (C2):** The broader economic state (e.g., "Expansion").
+    * **Risk Profile:** Alpha (Outperformance) and Beta (Volatility) vs NZX50.
     
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
     * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from **Column D** of your sheet.
-    * **Risk Profile:** Compares portfolio volatility (Beta) against the NZX50.
+    * **Volume:** 1.0x is normal. >1.5x is high.
     """)
 
 # --- CONFIGURATION ---
@@ -88,7 +88,7 @@ def fetch_data():
             macro_data['status'] = True
         except: macro_data['status'] = False
         
-        # 4. Benchmark Data (NZX50) for Beta
+        # 4. Benchmark Data (NZX50)
         try:
             nzx = yf.download(BENCHMARK_TICKER, period="1y", progress=False)
             if isinstance(nzx.columns, pd.MultiIndex):
@@ -98,14 +98,19 @@ def fetch_data():
             else:
                 nzx = nzx.iloc[:, 0]
             
-            # Force Series
+            # Force Series & Calculate Returns
             if isinstance(nzx, pd.DataFrame): nzx = nzx.iloc[:, 0]
             nzx_returns = nzx.pct_change().dropna()
-        except: nzx_returns = None
+            
+            # Calculate 1Y Total Return for Benchmark
+            nzx_1y_return = ((nzx.iloc[-1] - nzx.iloc[0]) / nzx.iloc[0]) * 100
+        except: 
+            nzx_returns = None
+            nzx_1y_return = 0.0
         
-        return df, macro_data, data, hist_data, nzx_returns, None
+        return df, macro_data, data, hist_data, nzx_returns, nzx_1y_return, None
     except Exception as e:
-        return None, None, None, None, None, str(e)
+        return None, None, None, None, None, 0.0, str(e)
 
 # --- HISTORY UPDATER ---
 def update_history_log(current_val):
@@ -146,7 +151,7 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.rerun()
 
 # --- MAIN LOGIC ---
-df_raw, macro_data, raw_sheet_data, hist_raw, nzx_returns, error = fetch_data()
+df_raw, macro_data, raw_sheet_data, hist_raw, nzx_returns, nzx_1y_val, error = fetch_data()
 
 if error:
     st.error(f"Connection Error: {error}")
@@ -247,7 +252,7 @@ if df_raw is not None:
         if "PRIVATE" in t:
             manual_price = 0
             try:
-                # Force fetch from Column D (Index 3) using raw data lookup
+                # Force fetch from Column D (Index 3)
                 raw_row = next(r for r in raw_sheet_data if str(r[0]).strip().upper() == str(row['Ticker']).strip().upper())
                 if len(raw_row) > 3: manual_price = clean_number(raw_row[3])
             except: pass
@@ -278,7 +283,6 @@ if df_raw is not None:
                 # BETA CALCULATION
                 if nzx_returns is not None and len(closes) > 30:
                     stock_ret = closes.pct_change().dropna()
-                    # Align dates
                     aligned = pd.concat([stock_ret, nzx_returns], axis=1, join='inner').dropna()
                     if len(aligned) > 20:
                         cov = aligned.iloc[:, 0].cov(aligned.iloc[:, 1])
@@ -335,13 +339,23 @@ if df_raw is not None:
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
-    # PORTFOLIO BETA CALC
+    # PORTFOLIO ALPHA/BETA CALC
     total_val = portfolio['Market Value'].sum()
     if total_val > 0:
-        port_beta = (portfolio['Beta'] * (portfolio['Market Value'] / total_val)).sum()
-    else: port_beta = 1.0
+        portfolio['Weight'] = portfolio['Market Value'] / total_val
+        port_beta = (portfolio['Beta'] * portfolio['Weight']).sum()
+        
+        # Portfolio 1Y Return (Weighted Average)
+        # Handle cases where 1Y % might be NaN (new stocks) - fill with 0 for safety
+        port_1y_return = (portfolio['1Y %'].fillna(0) * portfolio['Weight']).sum()
+    else: 
+        port_beta = 1.0
+        port_1y_return = 0.0
     
-    # Determine Style
+    # Alpha (Excess Return vs NZX50)
+    port_alpha = port_1y_return - nzx_1y_val
+    
+    # Style Label
     if port_beta > 1.15: style = "Aggressive 🚀"
     elif port_beta < 0.85: style = "Defensive 🛡️"
     else: style = "Balanced ⚖️"
@@ -357,11 +371,18 @@ if df_raw is not None:
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
     k4.metric("Risk Profile (Beta)", f"{port_beta:.2f}", style)
+    
+    # Risk Row 2
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Portfolio 1Y Return", f"{port_1y_return:.1f}%")
+    r2.metric("NZX50 1Y Return", f"{nzx_1y_val:.1f}%")
+    r3.metric("vs NZX50 (Alpha)", f"{port_alpha:+.1f}%", delta_color="normal")
+    r4.empty()
 
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # TABLE (Restored P/E HEATMAP)
+        # TABLE
         display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
         
         st.dataframe(
