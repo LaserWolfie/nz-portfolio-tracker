@@ -28,6 +28,7 @@ with st.expander("📘 Dashboard Guide"):
 # --- CONFIGURATION ---
 SHEET_NAME = "Share Portfolio" 
 HISTORY_TAB_NAME = "History"
+CHART_TAB_NAME = "chart_data"
 BENCHMARK_TICKER = "^NZ50"
 MACRO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MRnuZCk9x317ApPxn_bMqI5q6FZAZO_qYJcDNkroq-o"
 
@@ -300,3 +301,21 @@ if df_raw is not None:
             fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
             ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
             st.pyplot(fig2)
+
+        # Total Return Bar Chart (Green/Red)
+        st.markdown("---")
+        st.subheader("Total Return by Stock")
+        p_sort = portfolio.sort_values('Total Gain %', ascending=False)
+        fig3, ax3 = plt.subplots(figsize=(10, 5))
+        fig3.patch.set_facecolor('#0E1117'); ax3.set_facecolor('#0E1117')
+        
+        colors = ['#00FF00' if x >= 0 else '#FF0000' for x in p_sort['Total Gain %']]
+        bars = ax3.bar(p_sort['Ticker'], p_sort['Total Gain %'], color=colors)
+        
+        ax3.set_ylabel("Total Gain %", color="white")
+        ax3.tick_params(axis='x', colors='white', rotation=45)
+        ax3.tick_params(axis='y', colors='white')
+        ax3.spines['bottom'].set_color('white'); ax3.spines['left'].set_color('white')
+        ax3.spines['top'].set_visible(False); ax3.spines['right'].set_visible(False)
+        
+        st.pyplot(fig3)
