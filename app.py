@@ -17,7 +17,7 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Signal (C23):** "Risk-On / Early Expansion"
+    * **Regime Signal (C23):** Primary cycle indicator (e.g., "Risk-On / Early Expansion").
     * **Current Regime (C2):** The broader economic state (e.g., "Expansion").
     * **Sentiment (C12):** "Euphoric" vs "Benign".
     
@@ -65,7 +65,7 @@ def fetch_data():
             # EXACT CELL MAPPING
             macro_data['regime_c2'] = m_sheet.acell('C2').value  # "Expansion"
             macro_data['score'] = m_sheet.acell('C5').value      # "4"
-            macro_data['sentiment'] = m_sheet.acell('C12').value # "Euphoric" (C12)
+            macro_data['sentiment'] = m_sheet.acell('C12').value # "Euphoric"
             macro_data['signal'] = m_sheet.acell('C23').value    # "Risk-On..."
             
             # Allocation
@@ -74,7 +74,7 @@ def fetch_data():
             macro_data['al'] = m_sheet.acell('C18').value
             macro_data['ca'] = m_sheet.acell('C19').value
             
-            # Chart Data
+            # Chart Data (Policy Rates)
             try:
                 c_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet(CHART_TAB_NAME)
                 macro_data['chart'] = c_sheet.get_all_values()
@@ -117,7 +117,7 @@ if df_raw is not None:
         st.subheader(f"🧠 Active Strategy: {strategy_mode}")
         
         # Extract & Clean
-        regime = macro_data.get('regime_c2', '-')
+        regime = macro_data.get('regime_c2', '-') # Targeted C2
         signal = macro_data.get('signal', '-')
         score = float(macro_data['score']) if macro_data['score'] else 0.0
         sentiment = macro_data.get('sentiment', 'Unknown')
@@ -171,17 +171,6 @@ if df_raw is not None:
             text=alt.Text('Allocation', format='.1%')
         )
         st.altair_chart((bars + text).properties(height=200), use_container_width=True)
-        
-        # Policy Rate Chart (or Placeholder)
-        if macro_data.get('chart'):
-            try:
-                c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
-                c_df.set_index(c_df.columns[0], inplace=True)
-                for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
-                with st.expander("📉 View Policy Rate Chart (US vs NZ)", expanded=False):
-                    st.line_chart(c_df)
-            except: 
-                st.warning("⚠️ Could not render chart from 'chart_data' tab.")
 
     st.markdown("---")
 
@@ -213,20 +202,21 @@ if df_raw is not None:
         bulk_data = get_live_prices(ticker_list)
         
         # Build Result Lists
-        res = {'curr':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
+        res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
         
         for idx, row in portfolio.iterrows():
             t = row['Yahoo_Ticker']
             try:
                 df_t = bulk_data[t] if len(ticker_list) > 1 else bulk_data
                 curr = float(df_t['Close'].iloc[-1])
+                prev = float(df_t['Close'].iloc[-2])
                 p30 = float(df_t['Close'].iloc[-22])
                 p1y = float(df_t['Close'].iloc[0])
                 v_now = float(df_t['Volume'].iloc[-1])
                 v_avg = df_t['Volume'].iloc[-65:].mean()
-            except: curr=0; p30=0; p1y=0; v_now=0; v_avg=0
+            except: curr=0; prev=0; p30=0; p1y=0; v_now=0; v_avg=0
             
-            res['curr'].append(curr); res['p30'].append(p30); res['p1y'].append(p1y)
+            res['curr'].append(curr); res['prev'].append(prev); res['p30'].append(p30); res['p1y'].append(p1y)
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
             
@@ -253,6 +243,7 @@ if df_raw is not None:
 
         # Assign
         portfolio['Current Price'] = res['curr']
+        portfolio['Previous Price'] = res['prev']
         portfolio['Price 30d'] = res['p30']
         portfolio['Price 1y'] = res['p1y']
         portfolio['Vol Ratio'] = res['vol']
@@ -266,7 +257,11 @@ if df_raw is not None:
         portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
         portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
         portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
-        portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio.get('Previous Price', portfolio['Current Price'])) / portfolio['Current Price']) * 100
+        
+        # Day Change Fix
+        portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
+        portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
+        
         portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
         portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
         portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
@@ -274,19 +269,20 @@ if df_raw is not None:
         # --- DISPLAY ---
         st.subheader("📊 Portfolio Health")
         total_val = portfolio['Market Value'].sum()
-        k1, k2, k3 = st.columns(3)
+        k1, k2, k3, k4 = st.columns(4)
         k1.metric("Portfolio Value", f"${total_val:,.2f}")
         k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
-        k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
+        k3.metric("Day Change", f"${portfolio['Day Change $'].sum():,.2f}")
+        k4.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
         # Table
         st.dataframe(
-            portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', 'Market Value', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']].style.format({
+            portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']].style.format({
                 "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", "Analyst Upside": "{:+.1f}%",
-                "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%", "Total Gain %": "{:+.1f}%"
+                "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%", "Total Gain %": "{:+.1f}%"
             })
             .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
-            .background_gradient(subset=['30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
+            .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-5, vmax=5)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=500
         )
@@ -309,3 +305,15 @@ if df_raw is not None:
             fig2.patch.set_facecolor('#0E1117'); ax2.set_facecolor('#0E1117')
             ax2.pie(h_counts, labels=h_counts.index, autopct='%1.0f%%', textprops={'color':'white'})
             st.pyplot(fig2)
+
+        # Policy Rate Chart
+        if macro_data.get('chart'):
+            st.markdown("---")
+            st.subheader("📉 Policy Rates (US vs NZ)")
+            try:
+                c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
+                c_df.set_index(c_df.columns[0], inplace=True)
+                for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
+                st.line_chart(c_df)
+            except: 
+                st.warning("⚠️ Could not render chart from 'chart_data' tab.")
