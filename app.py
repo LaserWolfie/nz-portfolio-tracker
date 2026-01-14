@@ -22,8 +22,8 @@ with st.expander("📘 Dashboard Guide"):
     
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
-    * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from your sheet.
-    * **Analyst Targets:** Prioritizes manual targets (Column AB).
+    * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from your sheet (Column D).
+    * **Volume:** Indicators restored.
     """)
 
 # --- CONFIGURATION ---
@@ -95,7 +95,7 @@ def clean_number(x):
 
 def fix_ticker(t):
     t = str(t).strip().upper()
-    if "PRIVATE" in t: return t # Don't touch private tickers
+    if "PRIVATE" in t: return t
     if 'ASX:' in t: return t.replace('ASX:', '') + '.AX'
     if 'NZE:' in t: return t.replace('NZE:', '') + '.NZ'
     return t + '.NZ' if '.' not in t else t
@@ -173,9 +173,9 @@ if df_raw is not None:
     portfolio = df_raw[df_raw['Ticker'] != ''].copy()
     portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     
-    # Identify Columns dynamically
+    # DYNAMIC COLUMN MAPPING (Ensures we find 'Current Price')
     col_map = {
-        'Current Price': next((c for c in portfolio.columns if 'Current' in c and 'Price' in c), None),
+        'Current Price': next((c for c in portfolio.columns if 'Current' in c and 'Price' in c), 'Current Price'),
         'Market Cap': next((c for c in portfolio.columns if 'Market' in c and 'Cap' in c), 'Market Cap'),
         'Analyst Target': next((c for c in portfolio.columns if 'Target' in c), 'Analyst Target'),
         'P/E': next((c for c in portfolio.columns if 'P/E' in c), 'P/E'),
@@ -205,25 +205,30 @@ if df_raw is not None:
     for idx, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
         
-        # --- CASE 1: PRIVATE INVESTMENT ---
+        # --- CASE 1: PRIVATE INVESTMENT (FIXED PRICE FETCH) ---
         if "PRIVATE" in t:
-            # Use Manual Price from Sheet (Fallback to Purchase Price)
+            # Look explicitly for the "Current Price" column (from mapping)
             manual_price = 0
-            if col_map['Current Price'] and not pd.isna(clean_number(row[col_map['Current Price']])):
-                manual_price = clean_number(row[col_map['Current Price']])
-            else:
+            # Try getting value from mapped column
+            try:
+                val = row.get(col_map['Current Price'])
+                manual_price = clean_number(val)
+            except: pass
+            
+            # If still 0/NaN, fallback to Purchase Price
+            if pd.isna(manual_price) or manual_price == 0:
                 manual_price = clean_number(row['Purchase Price'])
-                
+
             res['curr'].append(manual_price)
-            res['prev'].append(manual_price) # No history
+            res['prev'].append(manual_price) 
             res['p30'].append(manual_price)
             res['p1y'].append(manual_price)
             res['vol'].append(0)
             res['liq'].append(0)
             
-            # Manual Fundamentals
+            # Fundamentals
             res['pe'].append(0)
-            res['div'].append(clean_number(row.get(col_map['Div Yield']))) # Manual Yield
+            res['div'].append(clean_number(row.get(col_map['Div Yield'])))
             res['cap'].append(0)
             res['upside'].append(0)
             
@@ -296,18 +301,20 @@ if df_raw is not None:
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # Table
-    display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
+    # Table (RESTORED VOL RATIO)
+    display_cols = ['Ticker', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Vol Ratio', 'Total Gain %']
     
     st.dataframe(
         portfolio[display_cols].style.format({
             "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 
             "Analyst Upside": "{:+.1f}%", "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", 
-            "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", "P/E Ratio": "{:.1f}"
+            "1Y %": "{:+.1f}%", "Div Yield %": "{:.2f}%", "Total Gain %": "{:+.1f}%", 
+            "P/E Ratio": "{:.1f}", "Vol Ratio": "{:.1f}x"
         })
         .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
         .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
-        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
+        .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
+        .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
         use_container_width=True, height=500
     )
 
