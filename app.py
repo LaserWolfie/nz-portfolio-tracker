@@ -17,9 +17,9 @@ st.title("🥝 NZ Portfolio Analyzer")
 with st.expander("📘 Dashboard Guide"):
     st.markdown("""
     **1. Macro Strategy Engine:**
-    * **Regime Signal (C23):** Primary cycle indicator (e.g., "Risk-On / Early Expansion").
+    * **Regime Signal (C23):** Primary cycle indicator (e.g., "Risk-On").
     * **Current Regime (C2):** The broader economic state (e.g., "Expansion").
-    * **Sentiment (C12):** "Euphoric" vs "Benign".
+    * **Chart Data:** Pulls US vs NZ Policy Rates from the 'chart_data' tab.
     
     **2. The "Hybrid" Data Engine:**
     * **Analyst Targets:** Prioritizes manual targets (Column AB) over Yahoo data.
@@ -74,7 +74,7 @@ def fetch_data():
             macro_data['al'] = m_sheet.acell('C18').value
             macro_data['ca'] = m_sheet.acell('C19').value
             
-            # Chart Data (Policy Rates)
+            # Chart Data
             try:
                 c_sheet = client.open_by_url(MACRO_SHEET_URL).worksheet(CHART_TAB_NAME)
                 macro_data['chart'] = c_sheet.get_all_values()
@@ -146,7 +146,7 @@ if df_raw is not None:
 
         # Metrics
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Regime Signal (C23)", signal, f"Macro: {regime}")
+        m1.metric("Current Regime (C2)", regime, f"Signal: {signal}")
         m2.metric("Composite Score", f"{score}", "Range: -5 (Restrictive) to +5 (Supportive)")
         m3.metric("Sentiment", sentiment, delta_color="inverse" if "Euphoric" in str(sentiment) else "normal")
         m4.metric("Equity Target", f"{final_tgt*100:.0f}%", delta=f"Strategy: {strategy_mode.split(' ')[0]}")
@@ -195,7 +195,7 @@ if df_raw is not None:
     # LIVE FETCH
     @st.cache_data(ttl=900)
     def get_live_prices(tickers):
-        return yf.download(tickers, period="1y", group_by='ticker', progress=False)
+        return yf.download(tickers, period="5d", group_by='ticker', progress=False)
 
     ticker_list = portfolio['Yahoo_Ticker'].tolist()
     if ticker_list:
@@ -208,86 +208,117 @@ if df_raw is not None:
             t = row['Yahoo_Ticker']
             try:
                 df_t = bulk_data[t] if len(ticker_list) > 1 else bulk_data
-                curr = float(df_t['Close'].iloc[-1])
-                prev = float(df_t['Close'].iloc[-2])
-                p30 = float(df_t['Close'].iloc[-22])
-                p1y = float(df_t['Close'].iloc[0])
-                v_now = float(df_t['Volume'].iloc[-1])
-                v_avg = df_t['Volume'].iloc[-65:].mean()
-            except: curr=0; prev=0; p30=0; p1y=0; v_now=0; v_avg=0
+                # Need at least 2 days for day change
+                closes = df_t['Close']
+                curr = float(closes.iloc[-1]) if len(closes) > 0 else 0
+                prev = float(closes.iloc[-2]) if len(closes) > 1 else curr
+                
+                # 30d/1y data needs more history, yfinance '5d' isn't enough for 30d calc. 
+                # Re-fetching deeper history for sparklines if needed, or accepting 5d is for day change.
+                # Actually, user wants 30d and 1y. Let's fetch 1y.
+                pass 
+            except: curr=0; prev=0
             
-            res['curr'].append(curr); res['prev'].append(prev); res['p30'].append(p30); res['p1y'].append(p1y)
-            res['vol'].append(v_now/v_avg if v_avg>0 else 0)
-            res['liq'].append(v_avg * curr)
-            
-            # Hybrid Data
-            sheet_pe = clean_number(row.get(col_map['P/E']))
+            # Fundamentals
             sheet_div = clean_number(row.get(col_map['Div Yield']))
+            sheet_pe = clean_number(row.get(col_map['P/E']))
             
             y_pe, y_div, y_cap = float('nan'), 0, 0
-            if pd.isna(sheet_pe):
-                try: 
-                    info = yf.Ticker(t).info
-                    y_pe = info.get('trailingPE', float('nan'))
-                    y_div = (info.get('dividendYield', 0) or 0) * 100
-                    y_cap = info.get('marketCap', 0)
-                except: pass
             
+            # We need to fetch 'info' for fundamentals one by one or rely on what we have.
+            # Batch downloading 'info' isn't supported well. We do it in loop.
+            try:
+                info = yf.Ticker(t).info
+                y_pe = info.get('trailingPE', float('nan'))
+                # Yield: Yahoo returns decimal (0.05). We want 5.0.
+                y_div = (info.get('dividendYield', 0) or 0) * 100
+                y_cap = info.get('marketCap', 0)
+                
+                # Re-get history for 30d/1y if 'bulk_data' was short (it was 5d above? No, I'll switch to 1y below)
+            except: pass
+            
+            # Smart Yield Fix: If sheet has 0.05, treat as 5.0. If 5.0, treat as 5.0.
+            if not pd.isna(sheet_div):
+                if sheet_div < 1: sheet_div = sheet_div * 100
+            
+            final_div = y_div if y_div > 0 else sheet_div
+            res['div'].append(final_div)
             res['pe'].append(y_pe if not pd.isna(y_pe) else sheet_pe)
-            res['div'].append(y_div if y_div > 0 else sheet_div)
             res['cap'].append(y_cap)
             
+            # Upside
             tgt = row.get('Analyst Target', float('nan'))
-            if not pd.isna(tgt) and curr > 0: res['upside'].append(((tgt - curr)/curr)*100)
-            else: res['upside'].append(float('nan'))
+            res['upside'].append(((tgt - curr)/curr)*100 if curr > 0 and not pd.isna(tgt) else float('nan'))
 
-        # Assign
-        portfolio['Current Price'] = res['curr']
-        portfolio['Previous Price'] = res['prev']
-        portfolio['Price 30d'] = res['p30']
-        portfolio['Price 1y'] = res['p1y']
-        portfolio['Vol Ratio'] = res['vol']
-        portfolio['Daily Liquidity'] = res['liq']
+        # RE-FETCH FULL HISTORY FOR CALCS (To ensure we have 1y data)
+        # Using a fresh block to guarantee clean state
+        hist_data = yf.download(ticker_list, period="1y", group_by='ticker', progress=False)
+        
+        curr_l, prev_l, p30_l, p1y_l, vol_l, liq_l = [], [], [], [], [], []
+        
+        for t in ticker_list:
+            try:
+                d = hist_data[t] if len(ticker_list) > 1 else hist_data
+                # Prices
+                c = float(d['Close'].iloc[-1])
+                p = float(d['Close'].iloc[-2])
+                p30 = float(d['Close'].iloc[-22]) if len(d) > 22 else c
+                p1y = float(d['Close'].iloc[0]) if len(d) > 0 else c
+                # Volume
+                v = float(d['Volume'].iloc[-1])
+                va = d['Volume'].iloc[-65:].mean()
+                
+                curr_l.append(c); prev_l.append(p); p30_l.append(p30); p1y_l.append(p1y)
+                vol_l.append(v/va if va > 0 else 0)
+                liq_l.append(va * c)
+            except:
+                curr_l.append(0); prev_l.append(0); p30_l.append(0); p1y_l.append(0)
+                vol_l.append(0); liq_l.append(0)
+
+        # Assign Everything
+        portfolio['Current Price'] = curr_l
+        portfolio['Previous Price'] = prev_l
+        portfolio['Price 30d'] = p30_l
+        portfolio['Price 1y'] = p1y_l
+        portfolio['Vol Ratio'] = vol_l
+        portfolio['Daily Liquidity'] = liq_l
         portfolio['P/E Ratio'] = res['pe']
         portfolio['Div Yield %'] = res['div']
         portfolio['Market Cap'] = res['cap']
         portfolio['Analyst Upside'] = res['upside']
         
-        # Final Calcs
+        # Calculations
         portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
         portfolio['Cost Basis'] = portfolio['Shares'] * portfolio['Purchase Price']
         portfolio['Total Gain %'] = ((portfolio['Market Value'] - portfolio['Cost Basis']) / portfolio['Cost Basis']) * 100
-        
-        # Day Change Fix
-        portfolio['Day Change $'] = (portfolio['Current Price'] - portfolio['Previous Price']) * portfolio['Shares']
         portfolio['Day Change %'] = ((portfolio['Current Price'] - portfolio['Previous Price']) / portfolio['Previous Price']) * 100
-        
         portfolio['30D %'] = ((portfolio['Current Price'] - portfolio['Price 30d']) / portfolio['Price 30d']) * 100
         portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
-        portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'] / 100)
+        # Dividend Calc: Value * (Yield%/100)
+        portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
         # --- DISPLAY ---
         st.subheader("📊 Portfolio Health")
         total_val = portfolio['Market Value'].sum()
-        k1, k2, k3, k4 = st.columns(4)
+        k1, k2, k3 = st.columns(3)
         k1.metric("Portfolio Value", f"${total_val:,.2f}")
         k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
-        k3.metric("Day Change", f"${portfolio['Day Change $'].sum():,.2f}")
-        k4.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
+        k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-        # Table
+        # Table with Value ($)
+        display_cols = ['Ticker', 'Market Value', 'Current Price', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Analyst Upside']
         st.dataframe(
-            portfolio[['Ticker', 'Market Cap', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']].style.format({
-                "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", "Analyst Upside": "{:+.1f}%",
-                "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%", "Total Gain %": "{:+.1f}%"
+            portfolio[display_cols].style.format({
+                "Current Price": "${:.2f}", "Market Value": "${:,.0f}", "Analyst Upside": "{:+.1f}%",
+                "Day Change %": "{:+.1f}%", "30D %": "{:+.1f}%", "1Y %": "{:+.1f}%", "Div Yield %": "{:.1f}%"
             })
-            .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
-            .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-5, vmax=5)
+            .background_gradient(subset=['Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
+            .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8),
             use_container_width=True, height=500
         )
 
-        # Charts
+        # Pie Charts
         c1, c2 = st.columns(2)
         with c1:
             st.caption("Sector Allocation")
@@ -312,7 +343,10 @@ if df_raw is not None:
             st.subheader("📉 Policy Rates (US vs NZ)")
             try:
                 c_df = pd.DataFrame(macro_data['chart'][1:], columns=macro_data['chart'][0])
+                # Ensure date index
+                c_df[c_df.columns[0]] = pd.to_datetime(c_df[c_df.columns[0]], errors='coerce')
                 c_df.set_index(c_df.columns[0], inplace=True)
+                # Ensure numeric data
                 for c in c_df.columns: c_df[c] = pd.to_numeric(c_df[c], errors='coerce')
                 st.line_chart(c_df)
             except: 
