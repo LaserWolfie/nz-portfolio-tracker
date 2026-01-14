@@ -22,7 +22,7 @@ with st.expander("📘 Dashboard Guide"):
     
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
-    * **Private Funds:** Uses the **'Current Price'** column from your sheet.
+    * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from **Column D** of your sheet.
     * **Wealth Tracker:** Automatically logs daily total value to the 'History' tab.
     """)
 
@@ -58,7 +58,7 @@ def fetch_data():
         data = sheet.get_all_values()
         df = pd.DataFrame(data[1:], columns=[str(h).strip() for h in data[0]])
         
-        # 2. History Data (For Wealth Tracker)
+        # 2. History Data
         try:
             hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
             hist_data = hist_sheet.get_all_values()
@@ -92,7 +92,7 @@ def fetch_data():
     except Exception as e:
         return None, None, None, None, str(e)
 
-# --- HISTORY UPDATER (Non-Cached) ---
+# --- HISTORY UPDATER ---
 def update_history_log(current_val):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -106,7 +106,6 @@ def update_history_log(current_val):
         today = datetime.now().strftime("%Y-%m-%d")
         existing = h_sheet.get_all_values()
         
-        # Check if last row is today
         if not existing or existing[-1][0] != today:
             h_sheet.append_row([today, current_val])
             return True
@@ -207,14 +206,6 @@ if df_raw is not None:
         'Sector': next((c for c in portfolio.columns if 'Sector' in c), 'Sector')
     }
     
-    # DYNAMICALLY FIND "CURRENT PRICE" COLUMN INDEX
-    try:
-        headers = raw_sheet_data[0]
-        # Find index of 'Current Price' or 'Price'
-        price_col_idx = next(i for i, h in enumerate(headers) if 'Current' in str(h) and 'Price' in str(h))
-    except:
-        price_col_idx = -1 # Not found
-    
     portfolio['Shares'] = portfolio['Shares'].apply(clean_number)
     portfolio['Purchase Price'] = portfolio['Purchase Price'].apply(clean_number)
     if col_map['Analyst Target'] in portfolio.columns:
@@ -240,13 +231,11 @@ if df_raw is not None:
         # --- CASE 1: PRIVATE INVESTMENT ---
         if "PRIVATE" in t:
             manual_price = 0
-            if price_col_idx != -1:
-                try:
-                    # Lookup row in raw data (match by ticker)
-                    raw_row = next(r for r in raw_sheet_data if r[0] == row['Ticker'])
-                    if len(raw_row) > price_col_idx:
-                        manual_price = clean_number(raw_row[price_col_idx])
-                except: pass
+            try:
+                # Force fetch from Column D (Index 3)
+                raw_row = next(r for r in raw_sheet_data if str(r[0]).strip().upper() == str(row['Ticker']).strip().upper())
+                if len(raw_row) > 3: manual_price = clean_number(raw_row[3])
+            except: pass
             
             if manual_price == 0: manual_price = clean_number(row['Purchase Price'])
 
@@ -316,24 +305,22 @@ if df_raw is not None:
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
-    # --- DISPLAY METRICS ---
+    # --- DISPLAY ---
     st.subheader("📊 Portfolio Health")
     total_val = portfolio['Market Value'].sum()
     
-    # Update History if new day
     if update_history_log(total_val):
-        st.toast("✅ Wealth History Updated for Today!")
+        st.toast("✅ Wealth History Updated!")
 
     k1, k2, k3 = st.columns(3)
     k1.metric("Portfolio Value", f"${total_val:,.2f}")
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
 
-    # --- TABS FOR VIEWING ---
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # TABLE
+        # TABLE (Added P/E HEATMAP)
         display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
         
         st.dataframe(
@@ -346,7 +333,8 @@ if df_raw is not None:
             .background_gradient(subset=['Total Gain %', 'Analyst Upside'], cmap="RdYlGn", vmin=-20, vmax=20)
             .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
-            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5),
+            .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5)
+            .background_gradient(subset=['P/E Ratio'], cmap="RdYlGn_r", vmin=5, vmax=40), # Low PE = Green
             use_container_width=True, height=500
         )
 
@@ -426,7 +414,6 @@ if df_raw is not None:
                 h_df['Date'] = pd.to_datetime(h_df['Date'])
                 h_df['Value'] = pd.to_numeric(h_df['Value'])
                 st.area_chart(h_df.set_index('Date')['Value'], color="#00FF00")
-            except Exception as e:
-                st.warning(f"Could not load history: {e}")
+            except: st.warning("Could not load history.")
         else:
             st.info("No history data found. Today's value has been logged.")
