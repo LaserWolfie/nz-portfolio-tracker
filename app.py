@@ -23,7 +23,7 @@ with st.expander("📘 Dashboard Guide"):
     **2. The "Hybrid" Data Engine:**
     * **Public Stocks:** Live data from Yahoo Finance.
     * **Private Funds:** Tickers starting with 'PRIVATE' use the 'Current Price' from **Column D** of your sheet.
-    * **Wealth Tracker:** Automatically logs daily total value to the 'History' tab.
+    * **Risk Profile:** Compares portfolio volatility (Beta) against the NZX50.
     """)
 
 # --- CONFIGURATION ---
@@ -88,9 +88,24 @@ def fetch_data():
             macro_data['status'] = True
         except: macro_data['status'] = False
         
-        return df, macro_data, data, hist_data, None
+        # 4. Benchmark Data (NZX50) for Beta
+        try:
+            nzx = yf.download(BENCHMARK_TICKER, period="1y", progress=False)
+            if isinstance(nzx.columns, pd.MultiIndex):
+                nzx = nzx.xs('Close', axis=1, level=0) if 'Close' in nzx.columns.get_level_values(0) else nzx.iloc[:, 0]
+            elif 'Close' in nzx.columns:
+                nzx = nzx['Close']
+            else:
+                nzx = nzx.iloc[:, 0]
+            
+            # Force Series
+            if isinstance(nzx, pd.DataFrame): nzx = nzx.iloc[:, 0]
+            nzx_returns = nzx.pct_change().dropna()
+        except: nzx_returns = None
+        
+        return df, macro_data, data, hist_data, nzx_returns, None
     except Exception as e:
-        return None, None, None, None, str(e)
+        return None, None, None, None, None, str(e)
 
 # --- HISTORY UPDATER ---
 def update_history_log(current_val):
@@ -131,7 +146,7 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.rerun()
 
 # --- MAIN LOGIC ---
-df_raw, macro_data, raw_sheet_data, hist_raw, error = fetch_data()
+df_raw, macro_data, raw_sheet_data, hist_raw, nzx_returns, error = fetch_data()
 
 if error:
     st.error(f"Connection Error: {error}")
@@ -223,7 +238,7 @@ if df_raw is not None:
     bulk_data = get_live_prices(public_tickers)
     
     # RESULT LISTS
-    res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[]}
+    res = {'curr':[], 'prev':[], 'p30':[], 'p1y':[], 'vol':[], 'liq':[], 'pe':[], 'div':[], 'cap':[], 'upside':[], 'beta':[]}
     
     for idx, row in portfolio.iterrows():
         t = row['Yahoo_Ticker']
@@ -232,7 +247,7 @@ if df_raw is not None:
         if "PRIVATE" in t:
             manual_price = 0
             try:
-                # Force fetch from Column D (Index 3)
+                # Force fetch from Column D (Index 3) using raw data lookup
                 raw_row = next(r for r in raw_sheet_data if str(r[0]).strip().upper() == str(row['Ticker']).strip().upper())
                 if len(raw_row) > 3: manual_price = clean_number(raw_row[3])
             except: pass
@@ -244,9 +259,11 @@ if df_raw is not None:
             res['vol'].append(0); res['liq'].append(0)
             res['pe'].append(0); res['div'].append(clean_number(row.get(col_map['Div Yield'])))
             res['cap'].append(0); res['upside'].append(0)
+            res['beta'].append(0)
             
         # --- CASE 2: PUBLIC STOCK ---
         else:
+            beta_val = 1.0 # Default
             try:
                 df_t = bulk_data[t] if len(public_tickers) > 1 else bulk_data
                 closes = df_t['Close']
@@ -254,13 +271,25 @@ if df_raw is not None:
                 prev = float(closes.iloc[-2]) if len(closes) > 1 else curr
                 p30 = float(closes.iloc[-22]) if len(closes) > 22 else curr
                 p1y = float(closes.iloc[0]) if len(closes) > 0 else curr
+                
                 v_now = float(df_t['Volume'].iloc[-1])
                 v_avg = df_t['Volume'].iloc[-65:].mean()
+                
+                # BETA CALCULATION
+                if nzx_returns is not None and len(closes) > 30:
+                    stock_ret = closes.pct_change().dropna()
+                    # Align dates
+                    aligned = pd.concat([stock_ret, nzx_returns], axis=1, join='inner').dropna()
+                    if len(aligned) > 20:
+                        cov = aligned.iloc[:, 0].cov(aligned.iloc[:, 1])
+                        var = aligned.iloc[:, 1].var()
+                        beta_val = cov / var if var != 0 else 1.0
             except: curr=0; prev=0; p30=0; p1y=0; v_now=0; v_avg=0
             
             res['curr'].append(curr); res['prev'].append(prev); res['p30'].append(p30); res['p1y'].append(p1y)
             res['vol'].append(v_now/v_avg if v_avg>0 else 0)
             res['liq'].append(v_avg * curr)
+            res['beta'].append(beta_val)
             
             sheet_pe = clean_number(row.get(col_map['P/E']))
             sheet_div = clean_number(row.get(col_map['Div Yield']))
@@ -295,6 +324,7 @@ if df_raw is not None:
     portfolio['Div Yield %'] = res['div']
     portfolio['Market Cap'] = res['cap']
     portfolio['Analyst Upside'] = res['upside']
+    portfolio['Beta'] = res['beta']
     
     # Calculations
     portfolio['Market Value'] = portfolio['Shares'] * portfolio['Current Price']
@@ -305,22 +335,33 @@ if df_raw is not None:
     portfolio['1Y %'] = ((portfolio['Current Price'] - portfolio['Price 1y']) / portfolio['Price 1y']) * 100
     portfolio['Est. Annual Income'] = portfolio['Market Value'] * (portfolio['Div Yield %'].fillna(0) / 100)
 
+    # PORTFOLIO BETA CALC
+    total_val = portfolio['Market Value'].sum()
+    if total_val > 0:
+        port_beta = (portfolio['Beta'] * (portfolio['Market Value'] / total_val)).sum()
+    else: port_beta = 1.0
+    
+    # Determine Style
+    if port_beta > 1.15: style = "Aggressive 🚀"
+    elif port_beta < 0.85: style = "Defensive 🛡️"
+    else: style = "Balanced ⚖️"
+
     # --- DISPLAY ---
     st.subheader("📊 Portfolio Health")
-    total_val = portfolio['Market Value'].sum()
     
     if update_history_log(total_val):
         st.toast("✅ Wealth History Updated!")
 
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric("Portfolio Value", f"${total_val:,.2f}")
     k2.metric("Total Profit", f"${(total_val - portfolio['Cost Basis'].sum()):,.2f}")
     k3.metric("Est. Dividends", f"${portfolio['Est. Annual Income'].sum():,.2f}")
+    k4.metric("Risk Profile (Beta)", f"{port_beta:.2f}", style)
 
     tab1, tab2 = st.tabs(["🔎 Holdings Table", "📈 Wealth History"])
     
     with tab1:
-        # TABLE (Added P/E HEATMAP)
+        # TABLE (Restored P/E HEATMAP)
         display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
         
         st.dataframe(
@@ -334,7 +375,7 @@ if df_raw is not None:
             .background_gradient(subset=['Day Change %', '30D %', '1Y %'], cmap="RdYlGn", vmin=-10, vmax=10)
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
             .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5)
-            .background_gradient(subset=['P/E Ratio'], cmap="RdYlGn_r", vmin=5, vmax=40), # Low PE = Green
+            .background_gradient(subset=['P/E Ratio'], cmap="RdYlGn_r", vmin=5, vmax=40),
             use_container_width=True, height=500
         )
 
