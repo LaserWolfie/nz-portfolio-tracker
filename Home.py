@@ -1,240 +1,154 @@
 import streamlit as st
+import os
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="NZ Wealth Manager Pro",
-    page_icon="💰",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- 1. PAGE CONFIGURATION ---
+st.set_page_config(page_title="NZ Wealth Manager Pro", page_icon="💰", layout="wide")
 
-# --- STYLE OVERRIDES ---
-st.markdown("""
-<style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; }
-    div.stButton > button { width: 100%; }
-</style>
-""", unsafe_allow_html=True)
-
-# --- SIDEBAR: PRO SETTINGS ---
-st.sidebar.title("⚙️ Pro Settings")
-
-# 1. Dynamic Tax Bracket Selector
-st.sidebar.subheader("Tax Parameters")
-tax_brackets = {
-    "10.5% ($0 - $15.6k)": 0.105,
-    "17.5% ($15.6k - $53.5k)": 0.175,
-    "30.0% ($53.5k - $78.1k)": 0.30,
-    "33.0% ($78.1k - $180k)": 0.33,
-    "39.0% ($180k+)": 0.39
-}
-
-selected_label = st.sidebar.selectbox(
-    "Select Marginal Tax Rate:",
-    options=list(tax_brackets.keys()),
-    index=1, # Defaults to 17.5%
-    help="Select your personal income bracket to recalculate tax arbitrage."
-)
-MARGINAL_TAX_RATE = tax_brackets[selected_label]
-
-# 2. Mortgage Parameters (Now Interactive too)
-st.sidebar.subheader("Debt Parameters")
-MORTGAGE_RATE = st.sidebar.number_input("Mortgage Interest Rate (%)", min_value=0.0, max_value=15.0, value=5.0, step=0.1) / 100
-MORTGAGE_DRAWN = st.sidebar.number_input("Mortgage Balance ($)", value=430000, step=1000)
-LIQUIDITY_AVAILABLE = st.sidebar.number_input("Available Liquidity ($)", value=100000, step=1000)
-
-# Constants
-COMPANY_TAX_RATE = 0.28     # 28% Imputation Rate
-
-# --- HELPER FUNCTIONS ---
-def get_google_sheet():
-    """Connects to Google Sheets using secrets."""
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
-        client = gspread.authorize(creds)
-        return client.open("Share Portfolio")
-    except Exception as e:
-        st.error(f"🔌 Connection failed: {e}")
+# --- 2. CONNECTION ENGINE ---
+@st.cache_resource
+def init_connection():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    if os.path.exists("credentials.json"):
+        return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    elif "gcp_service_account" in st.secrets:
+        return ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+    else:
+        st.error("🚨 Connection Failed: No credentials found.")
         st.stop()
 
-def clean_val(x):
-    """Converts currency strings '$1,234.56' to floats 1234.56"""
-    if pd.isna(x) or str(x).strip() == "": return 0.0
-    try:
-        return float(str(x).replace('$', '').replace(',', '').replace('%', '').replace(' ', '').strip())
-    except: return 0.0
+def robust_numeric_clean(df, column_name):
+    """Safely converts a spreadsheet column to numbers, handling symbols and errors."""
+    if column_name in df.columns:
+        clean_col = (
+            df[column_name].astype(str)
+            .str.replace(r'[$,%]', '', regex=True)
+            .str.replace(',', '')
+            .str.strip()
+            .replace(['#N/A', '#VALUE!', '#DIV/0!', 'None', 'nan', '', '-'], '0')
+        )
+        df[column_name] = pd.to_numeric(clean_col, errors='coerce').fillna(0)
+    return df
 
-@st.cache_data(ttl=300) 
-def load_data_pro():
-    sheet = get_google_sheet()
-    
-    # 1. Load Stocks
+@st.cache_data(ttl=600)
+def load_data_from_sheet():
     try:
-        s_data = sheet.worksheet("Share Portfolio").get_all_records()
-        stock_df = pd.DataFrame(s_data)
-        if 'Market Value' not in stock_df.columns: stock_df['Market Value'] = 0
-        if 'Est. Annual Income' not in stock_df.columns: stock_df['Est. Annual Income'] = 0
-    except: stock_df = pd.DataFrame()
+        creds = init_connection()
+        client = gspread.authorize(creds)
+        
+        # --- SHARE PORTFOLIO ---
+        STOCKS_ID = "1_Fj4lKv2esBxwwVn-ALfHNJp3OGNUChe8lQ5zfMkzD0"
+        sheet1 = client.open_by_key(STOCKS_ID)
+        s_values = sheet1.worksheet("Clean_Stocks").get_all_values()
+        stock_headers = [str(h).strip() for h in s_values[0]]
+        stock_df = pd.DataFrame(s_values[1:], columns=stock_headers)
+        if 'Value' in stock_df.columns:
+            stock_df = robust_numeric_clean(stock_df, 'Value')
+        
+        # --- PROPORTIONAL PROPERTY ---
+        PROPERTY_ID = "142q0VXqiC6RWSjcS67BGR_ROVLYFtl61QgmRrYhoUkQ"
+        sheet2 = client.open_by_key(PROPERTY_ID) 
+        p_values = sheet2.worksheet("Syndicate_Data").get_all_values()
+        prop_headers = [str(h).strip() for h in p_values[0]]
+        prop_df = pd.DataFrame(p_values[1:], columns=prop_headers)
+        
+        # Clean numeric columns for calculations (handle both spaced and underscored headers)
+        if 'Current Value' in prop_df.columns:
+            prop_df = robust_numeric_clean(prop_df, 'Current Value')
+        if 'Current_Value' in prop_df.columns:
+            prop_df = robust_numeric_clean(prop_df, 'Current_Value')
+        if 'Original Value' in prop_df.columns:
+            prop_df = robust_numeric_clean(prop_df, 'Original Value')
+        if 'Original_Value' in prop_df.columns:
+            prop_df = robust_numeric_clean(prop_df, 'Original_Value')
+        if 'Annual_Distribution' in prop_df.columns:
+            prop_df = robust_numeric_clean(prop_df, 'Annual_Distribution')
 
-    # 2. Load Syndicates
-    try:
-        p_data = sheet.worksheet("Syndicate_Data").get_all_records()
-        prop_df = pd.DataFrame(p_data)
-        if 'Current_Value' not in prop_df.columns: prop_df['Current_Value'] = 0
-        if 'Annual_Distribution' not in prop_df.columns: prop_df['Annual_Distribution'] = 0
-    except: prop_df = pd.DataFrame()
-    
-    return stock_df, prop_df
+        return stock_df, prop_df
+    except Exception as e:
+        st.error(f"Sync Error: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-# --- MAIN DASHBOARD LOGIC ---
+@st.cache_data(ttl=600)
+def load_personal_assets():
+    if os.path.exists("personal_assets.csv"):
+        df = pd.read_csv("personal_assets.csv")
+        if 'Current_Value' in df.columns:
+            df = robust_numeric_clean(df, 'Current_Value')
+        return df
+    return pd.DataFrame()
+
+# --- 3. SIDEBAR & REFRESH ---
+st.sidebar.title("⚙️ Controls")
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    if 'stock_df' in st.session_state: del st.session_state.stock_df
+    if 'prop_df' in st.session_state: del st.session_state.prop_df
+    if 'personal_df' in st.session_state: del st.session_state.personal_df
+    st.rerun()
+
+# --- 4. DATA ORCHESTRATION (THE BRIDGE) ---
+if 'stock_df' not in st.session_state:
+    with st.spinner('Loading Clean_Stocks Data...'):
+        s_df, p_df = load_data_from_sheet()
+        
+        # --- CRITICAL FIX: Prep data for the 2-page system ---
+        if not p_df.empty:
+            # Replace spaces with underscores to prevent sub-page crashes
+            p_df.columns = [c.replace(' ', '_') for c in p_df.columns]
+        
+        st.session_state.stock_df = s_df
+        st.session_state.prop_df = p_df
+
+if 'personal_df' not in st.session_state:
+    st.session_state.personal_df = load_personal_assets()
+
+stock_df = st.session_state.stock_df
+prop_df = st.session_state.prop_df
+personal_df = st.session_state.personal_df
+
+# --- 5. DASHBOARD SUMMARY ---
 st.title("💰 NZ Wealth Manager: Pro Edition")
-st.caption(f"Forensic Analysis Mode | Tax Bracket: **{MARGINAL_TAX_RATE*100}%** | Mortgage: **{MORTGAGE_RATE*100}%**")
+st.subheader("Total Wilson Family Assets and Income")
 
-stock_df, prop_df = load_data_pro()
+if not stock_df.empty:
+    st.success("✨ Data successfully loaded and shared across pages.")
+    
+    stock_df_for_total = stock_df
+    if 'Ticker' in stock_df_for_total.columns:
+        stock_df_for_total = stock_df_for_total[
+            ~stock_df_for_total['Ticker'].astype(str).str.contains('total', case=False, na=False)
+        ]
+    t_stock = pd.to_numeric(stock_df_for_total.get('Value', 0), errors='coerce').sum()
+    prop_value_series = prop_df.get('Current_Value')
+    if prop_value_series is None:
+        prop_value_series = prop_df.get('Current Value', 0)
+    t_prop = pd.to_numeric(prop_value_series, errors='coerce').sum()
+    t_personal = pd.to_numeric(personal_df.get('Current_Value', 0), errors='coerce').sum() if not personal_df.empty else 0
+    t_personal_debt = pd.to_numeric(personal_df.get('Loan_Balance', 0), errors='coerce').sum() if not personal_df.empty else 0
 
-if not stock_df.empty and not prop_df.empty:
+    # Total income = stock dividends + property distributions
+    stock_income = 0
+    if 'Value' in stock_df_for_total.columns and 'Div Yield' in stock_df_for_total.columns:
+        vals = pd.to_numeric(stock_df_for_total['Value'], errors='coerce').fillna(0)
+        yields = pd.to_numeric(stock_df_for_total['Div Yield'], errors='coerce').fillna(0)
+        yields = yields.apply(lambda v: v / 100 if v > 1 else v)
+        stock_income = (vals * yields).sum()
+    prop_income = pd.to_numeric(prop_df.get('Annual_Distribution', 0), errors='coerce').sum() if not prop_df.empty else 0
+    pension_income = 38145
+    t_income = stock_income + prop_income + pension_income
     
-    # --- 1. DATA PROCESSING ---
-    stock_df['Net_Value'] = stock_df['Market Value'].apply(clean_val)
-    stock_df['Net_Income'] = stock_df['Est. Annual Income'].apply(clean_val)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Stock Assets", f"${t_stock:,.0f}")
+    c2.metric("Property Assets", f"${t_prop:,.0f}")
+    c3.metric("Personal Assets", f"${t_personal:,.0f}")
+    c4.metric("Total Net Worth", f"${(t_stock + t_prop + t_personal - t_personal_debt):,.0f}")
+    c5.metric("Total Income", f"${t_income:,.0f}")
     
-    prop_df['Net_Value'] = prop_df['Current_Value'].apply(clean_val)
-    prop_df['Net_Income'] = prop_df['Annual_Distribution'].apply(clean_val)
-    
-    # Totals
-    total_stock_val = stock_df['Net_Value'].sum()
-    total_prop_val = prop_df['Net_Value'].sum()
-    total_wealth = total_stock_val + total_prop_val
-    
-    total_stock_inc = stock_df['Net_Income'].sum()
-    total_prop_inc = prop_df['Net_Income'].sum()
-    total_passive_income = total_stock_inc + total_prop_inc
-    
-    # --- 2. DYNAMIC TAX CALCULATIONS ---
-    # Imputation Logic:
-    # Gross Dividend = Net / (1 - 0.28)
-    # Tax Liability = Gross * User_Selected_Rate
-    # Credits Attached = Gross * 0.28
-    
-    gross_stock_income = total_stock_inc / (1 - COMPANY_TAX_RATE)
-    imputation_credits = gross_stock_income * COMPANY_TAX_RATE
-    tax_liability = gross_stock_income * MARGINAL_TAX_RATE
-    
-    # Positive = Refund, Negative = Tax Bill
-    imputation_result = imputation_credits - tax_liability
-    
-    # Mortgage Cost
-    annual_mortgage_cost = MORTGAGE_DRAWN * MORTGAGE_RATE
-    wealth_gap = total_passive_income - annual_mortgage_cost
-
-    # --- 3. HIGH LEVEL METRICS ---
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Invested Assets", f"${total_wealth:,.0f}", 
-                  delta=f"Cash: ${LIQUIDITY_AVAILABLE:,.0f}", delta_color="off")
-        
-    with col2:
-        st.metric("Gross Passive Income", f"${total_passive_income:,.0f}", 
-                  help="Combined Dividends & Property Distributions")
-        
-    with col3:
-        st.metric(f"Mortgage Cost ({MORTGAGE_RATE*100}%)", f"-${annual_mortgage_cost:,.0f}", 
-                  f"Debt: ${MORTGAGE_DRAWN:,.0f}", delta_color="inverse")
-        
-    with col4:
-        icon = "🟢" if wealth_gap > 0 else "🔴"
-        st.metric("The Wealth Gap", f"${wealth_gap:,.0f}", 
-                  f"{icon} Surplus/Deficit", delta_color="normal" if wealth_gap > 0 else "inverse")
-
-    st.markdown("---")
-
-    # --- 4. CHARTS ---
-    c1, c2 = st.columns([1, 1])
-    
-    with c1:
-        st.subheader("📊 Asset Allocation")
-        alloc_data = pd.DataFrame({
-            'Asset': ['NZ/AU Stocks', 'Property Syndicates'],
-            'Value': [total_stock_val, total_prop_val]
-        })
-        fig = px.pie(alloc_data, values='Value', names='Asset', hole=0.5, 
-                     color_discrete_sequence=['#00CC96', '#636EFA'])
-        fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c2:
-        st.subheader("💵 Income Source")
-        inc_data = pd.DataFrame({
-            'Source': ['Stocks', 'Property'],
-            'Income': [total_stock_inc, total_prop_inc]
-        })
-        fig2 = px.bar(inc_data, x='Income', y='Source', orientation='h', text_auto='.2s',
-                      color='Source', color_discrete_map={'Stocks': '#00CC96', 'Property': '#636EFA'})
-        fig2.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
-        st.plotly_chart(fig2, use_container_width=True)
-
-    # --- 5. FORENSIC STRATEGY ENGINE ---
-    st.subheader("🧠 Forensic Strategy Engine")
-    
-    blended_yield = (total_passive_income / total_wealth) if total_wealth > 0 else 0
-    
-    s1, s2, s3 = st.columns(3)
-    
-    with s1:
-        st.markdown("### 📉 Tax Imputation")
-        if imputation_result > 0:
-            st.success(f"""
-            **Refund Opportunity**
-            Your rate ({MARGINAL_TAX_RATE*100}%) is lower than the company rate (28%).
-            * Credits: **${imputation_credits:,.0f}**
-            * Liability: **${tax_liability:,.0f}**
-            * **Est. Refund:** **${imputation_result:,.0f}**
-            """)
-        elif imputation_result < 0:
-            st.warning(f"""
-            **Tax Top-Up Required**
-            Your rate ({MARGINAL_TAX_RATE*100}%) is higher than the company rate (28%).
-            * Credits: **${imputation_credits:,.0f}**
-            * Liability: **${tax_liability:,.0f}**
-            * **Tax Bill:** **${abs(imputation_result):,.0f}**
-            """)
-        else:
-            st.info("Tax Neutral. Your rate matches the imputation rate.")
-
-    with s2:
-        st.markdown("### 🏦 Debt Hurdle")
-        if blended_yield < MORTGAGE_RATE:
-            st.error(f"""
-            **Negative Carry Alert**
-            Portfolio Yield: **{blended_yield*100:.2f}%**
-            Mortgage Cost: **{MORTGAGE_RATE*100:.2f}%**
-            * You are losing **${abs(wealth_gap):,.0f}/yr** vs paying down debt.
-            """)
-        else:
-            st.success(f"""
-            **Positive Carry**
-            Portfolio Yield: **{blended_yield*100:.2f}%**
-            Mortgage Cost: **{MORTGAGE_RATE*100:.2f}%**
-            * You earn **${wealth_gap:,.0f}/yr** above debt costs.
-            """)
-            
-    with s3:
-        st.markdown("### 🏢 Property Scan")
-        high_lvr = prop_df[prop_df['LVR_Percent'].apply(clean_val) > 0.45]
-        count = len(high_lvr)
-        if count > 0:
-            st.warning(f"⚠️ **{count} Syndicates** > 45% LVR.")
-            st.dataframe(high_lvr[['Entity_Name', 'LVR_Percent']], hide_index=True)
-        else:
-            st.success("✅ LVR Levels Safe (<45%).")
-
+    with st.expander("🕵️ Connection Forensics"):
+        st.write(f"**Property Columns Found:** {', '.join(prop_df.columns)}")
+        st.write(f"**Broadway Data Check:** {'Original_Value' in prop_df.columns}")
 else:
-    st.warning("⚠️ No Data Found. Please ensure Google Sheet tabs are named correctly.")
+    st.warning("⚠️ Waiting for data connection...")
