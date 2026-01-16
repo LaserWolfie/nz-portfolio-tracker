@@ -196,6 +196,14 @@ if not df_raw.empty:
     else:
         portfolio_is_fresh = True
         portfolio = df_raw[df_raw['Ticker'] != ''].copy()
+        if 'Ticker' in portfolio.columns:
+            ticker_series = portfolio['Ticker']
+            ticker_clean = ticker_series.astype(str).str.strip()
+            portfolio = portfolio[
+                ticker_series.notna()
+                & ticker_clean.ne('')
+                & ~ticker_clean.str.contains(r"(?i)\btotal\b", regex=True, na=False)
+            ].copy()
         portfolio['Yahoo_Ticker'] = portfolio['Ticker'].apply(fix_ticker)
     
         # Clean Numbers
