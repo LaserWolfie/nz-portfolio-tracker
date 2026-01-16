@@ -3,9 +3,11 @@ import os
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from src.data.sheets import ensure_data_loaded, clear_app_caches
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Wealth Manager Pro", page_icon="💰", layout="wide")
+ensure_data_loaded()
 
 # --- 2. CONNECTION ENGINE ---
 @st.cache_resource
@@ -82,29 +84,11 @@ def load_personal_assets():
 
 # --- 3. SIDEBAR & REFRESH ---
 st.sidebar.title("⚙️ Controls")
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    if 'stock_df' in st.session_state: del st.session_state.stock_df
-    if 'prop_df' in st.session_state: del st.session_state.prop_df
-    if 'personal_df' in st.session_state: del st.session_state.personal_df
+if st.sidebar.button("Refresh Data"):
+    clear_app_caches()
     st.rerun()
 
 # --- 4. DATA ORCHESTRATION (THE BRIDGE) ---
-if 'stock_df' not in st.session_state:
-    with st.spinner('Loading Clean_Stocks Data...'):
-        s_df, p_df = load_data_from_sheet()
-        
-        # --- CRITICAL FIX: Prep data for the 2-page system ---
-        if not p_df.empty:
-            # Replace spaces with underscores to prevent sub-page crashes
-            p_df.columns = [c.replace(' ', '_') for c in p_df.columns]
-        
-        st.session_state.stock_df = s_df
-        st.session_state.prop_df = p_df
-
-if 'personal_df' not in st.session_state:
-    st.session_state.personal_df = load_personal_assets()
-
 stock_df = st.session_state.stock_df
 prop_df = st.session_state.prop_df
 personal_df = st.session_state.personal_df

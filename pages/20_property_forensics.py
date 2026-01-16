@@ -1,3 +1,6 @@
+from src.data.sheets import ensure_data_loaded
+ensure_data_loaded()
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -107,10 +110,6 @@ def save_to_google_sheet(data_dict):
         return False
 
 # --- DATA LOADING ---
-if 'prop_df' not in st.session_state or st.session_state.prop_df.empty:
-    st.warning("⚠️ Data missing. Please go to the **Home** page first.")
-    st.stop()
-
 df = st.session_state.prop_df.copy()
 df.columns = [c.replace(' ', '_') for c in df.columns]
 

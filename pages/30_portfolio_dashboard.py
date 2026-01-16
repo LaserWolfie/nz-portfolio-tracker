@@ -1,3 +1,6 @@
+from src.data.sheets import ensure_data_loaded
+ensure_data_loaded()
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -8,10 +11,6 @@ st.set_page_config(page_title="Portfolio Dashboard", page_icon="📊", layout="w
 # Helper for numbers
 def clean_number(x):
     return utils.clean_number(x)
-
-if 'prop_df' not in st.session_state or st.session_state.prop_df.empty:
-    st.warning("⚠️ Data missing. Please go to the Home page first.")
-    st.stop()
 
 df = st.session_state.prop_df.copy()
 personal_df = st.session_state.get('personal_df', pd.DataFrame())

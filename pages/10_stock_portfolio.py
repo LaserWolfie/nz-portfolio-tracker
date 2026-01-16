@@ -1,3 +1,6 @@
+from src.data.sheets import ensure_data_loaded
+ensure_data_loaded()
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -118,10 +121,6 @@ def fetch_macro_history_benchmark():
         return None, None, None, 0.0
 
 # --- MAIN PAGE LOGIC ---
-if 'stock_df' not in st.session_state or st.session_state.stock_df.empty:
-    st.warning("⚠️ Data missing. Please go to the **Home** page first.")
-    st.stop()
-
 # 1. LOAD DATA
 df_raw = st.session_state.stock_df.copy()
 # 2. SIDEBAR
