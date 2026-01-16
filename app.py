@@ -105,7 +105,12 @@ if not stock_df.empty:
         stock_df_for_total = stock_df_for_total[
             ~stock_df_for_total['Ticker'].astype(str).str.contains('total', case=False, na=False)
         ]
-    t_stock = pd.to_numeric(stock_df_for_total.get('Value', 0), errors='coerce').sum()
+    t_stock = 0
+    for col in ["Market Value", "Market_Value", "Current Value", "Current_Value", "Value"]:
+        if col in stock_df_for_total.columns:
+            stock_df_for_total = robust_numeric_clean(stock_df_for_total, col)
+            t_stock = stock_df_for_total[col].sum()
+            break
     prop_value_series = prop_df.get('Current_Value')
     if prop_value_series is None:
         prop_value_series = prop_df.get('Current Value', 0)
