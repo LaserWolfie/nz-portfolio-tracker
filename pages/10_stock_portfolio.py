@@ -322,6 +322,8 @@ if not df_raw.empty:
 
     # --- DISPLAY METRICS ---
     total_val = portfolio['Market Value'].sum()
+    st.session_state["stock_assets_total"] = float(total_val)
+    st.session_state["stock_assets_updated_at"] = datetime.now().isoformat()
     st.subheader("📊 Portfolio Health")
     
     if portfolio_is_fresh and update_history_log(total_val): st.toast("✅ Wealth History Updated!")

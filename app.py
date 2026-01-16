@@ -111,6 +111,7 @@ if not stock_df.empty:
             stock_df_for_total = robust_numeric_clean(stock_df_for_total, col)
             t_stock = stock_df_for_total[col].sum()
             break
+    t_stock = float(st.session_state.get("stock_assets_total", t_stock) or 0)
     prop_value_series = prop_df.get('Current_Value')
     if prop_value_series is None:
         prop_value_series = prop_df.get('Current Value', 0)
