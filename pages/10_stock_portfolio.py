@@ -184,7 +184,7 @@ if macro_data and macro_data.get('status'):
     base = alt.Chart(alloc_df).encode(x=alt.X('Allocation', axis=None), y=alt.Y('Asset', sort=None, title=None))
     bars = base.mark_bar().encode(color=alt.Color('Asset', legend=None), tooltip=['Asset', alt.Tooltip('Allocation', format='.1%')])
     text = base.mark_text(align='left', dx=5, color='white').encode(text=alt.Text('Allocation', format='.1%'))
-    st.altair_chart((bars + text).properties(height=150), use_container_width=True)
+    st.altair_chart((bars + text).properties(height=150), width="stretch")
 
 st.markdown("---")
 
@@ -366,7 +366,7 @@ if not df_raw.empty:
             .background_gradient(subset=['Div Yield %'], cmap="Greens", vmin=0, vmax=8)
             .background_gradient(subset=['Vol Ratio'], cmap="Reds", vmin=0.5, vmax=2.5)
             .background_gradient(subset=['P/E Ratio'], cmap="RdYlGn_r", vmin=5, vmax=40),
-            use_container_width=True, height=500
+            width="stretch", height=500
         )
         
         # ALERTS & CONTEXT
