@@ -88,11 +88,17 @@ st.sidebar.title("⚙️ Controls")
 if st.sidebar.button("Refresh Data"):
     clear_app_caches()
     st.rerun()
+debug_show_dataframes = st.sidebar.checkbox("Debug: show dataframes")
 
 # --- 4. DATA ORCHESTRATION (THE BRIDGE) ---
 stock_df = st.session_state.stock_df
 prop_df = st.session_state.prop_df
 personal_df = st.session_state.personal_df
+
+if debug_show_dataframes:
+    st.write("stock_df shape:", stock_df.shape)
+    st.write("stock_df columns:", list(stock_df.columns))
+    st.dataframe(stock_df.head(20))
 
 # --- 5. DASHBOARD SUMMARY ---
 st.title("💰 NZ Wealth Manager: Pro Edition")
@@ -139,6 +145,20 @@ if not stock_df.empty:
     c5.metric("Total Income", f"${t_income:,.0f}")
     
     with st.expander("🕵️ Connection Forensics"):
+        st.markdown("**Stock Data**")
+        st.write("shape:", stock_df.shape)
+        st.write("columns:", list(stock_df.columns))
+        if {"Ticker", "Value"}.issubset(stock_df.columns):
+            st.dataframe(stock_df[["Ticker", "Value"]].head(20))
+        else:
+            st.dataframe(stock_df.head(20))
+        if "Value" in stock_df.columns:
+            value_series = pd.to_numeric(stock_df["Value"], errors="coerce").fillna(0)
+            st.write("t_stock:", float(value_series.sum()))
+            st.write("Value > 0 rows:", int((value_series > 0).sum()))
+        else:
+            st.write("t_stock:", 0)
+            st.write("Value > 0 rows:", 0)
         st.write(f"**Property Columns Found:** {', '.join(prop_df.columns)}")
         st.write(f"**Broadway Data Check:** {'Original_Value' in prop_df.columns}")
 else:

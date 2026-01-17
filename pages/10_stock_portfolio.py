@@ -1,4 +1,7 @@
-from src.data.sheets import ensure_data_loaded
+from src.data.sheets import ensure_data_loaded, load_signals_df
+from src.services.market_context import build_market_context_markdown, filter_signals_for_tickers
+from src.services.signal_qualifier import apply_qualifies, build_alias_map
+from src.utils.tickers import normalize_ticker
 ensure_data_loaded()
 
 import streamlit as st
@@ -187,6 +190,38 @@ if macro_data and macro_data.get('status'):
     st.altair_chart((bars + text).properties(height=150), width="stretch")
 
 st.markdown("---")
+
+# Signals debug
+debug_mode = st.session_state.get("debug_mode", False)
+if debug_mode:
+    signals_df = load_signals_df()
+    with st.expander("🔎 Signals Debug (Portfolio Alerts)"):
+        st.write(f"Rows loaded: {len(signals_df)} | Cols: {list(signals_df.columns)}")
+        portfolio_tickers = []
+        if isinstance(df_raw, pd.DataFrame) and "Ticker" in df_raw.columns:
+            portfolio_tickers = sorted(
+                {
+                    normalize_ticker(x)
+                    for x in df_raw["Ticker"].dropna().unique()
+                    if str(x).strip()
+                }
+            )
+        if isinstance(signals_df, pd.DataFrame) and not signals_df.empty:
+            alias_map = build_alias_map(df_raw if isinstance(df_raw, pd.DataFrame) else pd.DataFrame())
+            signals_with_qual = apply_qualifies(signals_df, alias_map)
+            signals_with_qual["_ticker_norm"] = signals_with_qual["Ticker"].astype(str).map(normalize_ticker)
+            after_ticker = signals_with_qual[
+                signals_with_qual["_ticker_norm"].isin(set(portfolio_tickers))
+            ].copy() if portfolio_tickers else signals_with_qual.copy()
+            after_qual = after_ticker[after_ticker.get("QualifiesAuto") == True].copy()
+            st.write("Rows after ticker filter:", len(after_ticker))
+            st.write("Rows after QualifiesAuto filter:", len(after_qual))
+            dropped = signals_with_qual.drop(after_qual.index, errors="ignore")
+            if not dropped.empty:
+                cols = [c for c in ["Ticker", "Title"] if c in dropped.columns]
+                st.write("Top 20 dropped rows:")
+                st.dataframe(dropped[cols].head(20) if cols else dropped.head(20))
+        st.dataframe(signals_df.head(20))
 
 # 4. PORTFOLIO ENGINE
 if not df_raw.empty:
@@ -379,15 +414,126 @@ if not df_raw.empty:
             for _, r in opps.iterrows(): st.success(f"**{r['Ticker']}**: {r['Analyst Upside']:.1f}% Upside")
         
         with c_ch:
-            st.markdown("##### 📰 Market Context (Jan 2026)")
-            st.info("""
-            * **Infratil (IFT):** Rated BBB+ Investment Grade. Strong EBITDAF growth.
-            * **EBOS Group (EBO):** Record earnings, driven by Healthcare segment.
-            * **Skellerup (SKL):** FY26 Guidance upgraded.
-            * **A2 Milk (ATM):** Upgraded Revenue Guidance.
-            * **Macro:** Dairy prices recovering (+6.3%).
-            """)
-            
+            st.markdown("##### 📰 Market Context (last 14 days)")
+            signals_df = st.session_state.get("signals_df")
+            if signals_df is None:
+                try:
+                    from src.data.sheets import load_signals_df as _load_signals_df
+
+                    signals_df = _load_signals_df()
+                    st.session_state.signals_df = signals_df
+                except Exception:
+                    signals_df = pd.DataFrame()
+                    st.info("Signals feed unavailable. Check your Catalyst Hub connection.")
+
+            if isinstance(signals_df, pd.DataFrame) and not signals_df.empty:
+                alias_map = build_alias_map(df_raw if isinstance(df_raw, pd.DataFrame) else pd.DataFrame())
+                signals_df = apply_qualifies(signals_df, alias_map)
+
+            signals_df_filtered = (
+                signals_df[signals_df["QualifiesAuto"] == True]
+                if isinstance(signals_df, pd.DataFrame) and "QualifiesAuto" in signals_df.columns
+                else signals_df
+            )
+
+            portfolio_tickers_raw = []
+            if isinstance(df_raw, pd.DataFrame) and "Ticker" in df_raw.columns:
+                portfolio_tickers_raw = [
+                    t for t in df_raw["Ticker"].dropna().unique().tolist() if str(t).strip()
+                ]
+
+            portfolio_tickers_raw = [t for t in portfolio_tickers_raw if t]
+            portfolio_norm = {normalize_ticker(t) for t in portfolio_tickers_raw if normalize_ticker(t)}
+
+            signals_match_base = (
+                signals_df_filtered.copy()
+                if isinstance(signals_df_filtered, pd.DataFrame)
+                else pd.DataFrame()
+            )
+            if not signals_match_base.empty and "Ticker" in signals_match_base.columns:
+                signals_match_base = signals_match_base.copy()
+                signals_match_base["TickerNorm"] = signals_match_base["Ticker"].map(normalize_ticker)
+
+                signals_norm = set(
+                    signals_match_base["TickerNorm"].dropna().unique().tolist()
+                )
+                intersection = sorted(list(signals_norm.intersection(portfolio_norm)))
+
+                with st.expander("Signals Health (ticker matching)", expanded=False):
+                    st.write("portfolio tickers (raw):", portfolio_tickers_raw)
+                    st.write("portfolio tickers (normalized):", sorted(list(portfolio_norm))[:50])
+                    st.write(
+                        "signals tickers (raw sample):",
+                        sorted(list(signals_match_base["Ticker"].dropna().unique()))[:50],
+                    )
+                    st.write(
+                        "signals tickers (normalized sample):",
+                        sorted(list(signals_norm))[:50],
+                    )
+                    st.write("intersection count:", len(intersection))
+                    st.write("intersection sample:", intersection[:20])
+
+                signals_filtered = signals_match_base[
+                    signals_match_base["TickerNorm"].isin(portfolio_norm)
+                ]
+            else:
+                signals_filtered = signals_match_base
+
+            filtered = filter_signals_for_tickers(signals_filtered, portfolio_norm, days=14)
+            with st.expander("🩺 Signals Health (what the app loaded)"):
+                st.write("total rows:", len(signals_df) if isinstance(signals_df, pd.DataFrame) else 0)
+                if isinstance(signals_df, pd.DataFrame) and "Ticker" in signals_df.columns:
+                    st.write("unique tickers:", signals_df["Ticker"].nunique(dropna=True))
+                    st.write(
+                        "top tickers:",
+                        signals_df["Ticker"].value_counts().head(20),
+                    )
+                    raw_signals = sorted(list(signals_df["Ticker"].dropna().unique()))[:30]
+                    norm_signals = sorted(
+                        list(signals_df["Ticker"].map(normalize_ticker).dropna().unique())
+                    )[:30]
+                    st.write("signals tickers (raw top 30):", raw_signals)
+                    st.write("signals tickers (normalized top 30):", norm_signals)
+                st.write("portfolio tickers (raw top 30):", portfolio_tickers_raw[:30])
+                st.write("portfolio tickers (normalized top 30):", sorted(list(portfolio_norm))[:30])
+                if isinstance(signals_df, pd.DataFrame) and "Ticker" in signals_df.columns:
+                    signals_norm_set = set(signals_df["Ticker"].map(normalize_ticker).dropna().unique())
+                    intersection = sorted(list(signals_norm_set.intersection(portfolio_norm)))
+                    st.write("intersection count:", len(intersection))
+                    st.write("intersection sample:", intersection[:20])
+                    if "Published" in signals_df.columns:
+                        published_dt = pd.to_datetime(signals_df["Published"], errors="coerce", utc=True)
+                        st.write(
+                            "rows removed by date window:",
+                            int(published_dt.notna().sum() - filtered.get("_published_dt", published_dt).notna().sum())
+                            if isinstance(filtered, pd.DataFrame)
+                            else 0,
+                        )
+                if isinstance(signals_filtered, pd.DataFrame):
+                    st.write(
+                        "rows removed by ticker match:",
+                        int(len(signals_df) - len(signals_filtered)) if isinstance(signals_df, pd.DataFrame) else 0,
+                    )
+                if isinstance(signals_df_filtered, pd.DataFrame) and "QualifiesAuto" in signals_df.columns:
+                    st.write(
+                        "rows removed by Qualifies filter:",
+                        int(len(signals_df) - len(signals_df_filtered)),
+                    )
+                if isinstance(signals_df, pd.DataFrame):
+                    if "FetchedAt" in signals_df.columns:
+                        st.write("max(FetchedAt):", pd.to_datetime(signals_df["FetchedAt"], errors="coerce").max())
+                    if "Published" in signals_df.columns:
+                        st.write("max(Published):", pd.to_datetime(signals_df["Published"], errors="coerce").max())
+            if filtered.empty:
+                st.info("No recent Catalyst signals found for your current portfolio tickers.")
+            else:
+                st.info(build_market_context_markdown(filtered, max_items=6))
+
+            with st.expander("🧪 Portfolio Signals (filtered)"):
+                st.dataframe(filtered, use_container_width=True)
+                if not filtered.empty and "Ticker" in filtered.columns:
+                    st.write("Counts by ticker:", filtered["Ticker"].value_counts())
+
             st.markdown("##### 🔊 Volume Alerts")
             vol_alerts = portfolio[portfolio['Vol Ratio'] > 1.5]
             if not vol_alerts.empty:
