@@ -115,10 +115,45 @@ def fetch_us_quote_yfinance(ticker: str) -> Quote:
 
 
 def fetch_us_quote(ticker: str, exchange: Optional[str] = None) -> Quote:
+    base_quote = None
     try:
-        return fetch_us_quote_google_finance(ticker, exchange=exchange)
+        base_quote = fetch_us_quote_google_finance(ticker, exchange=exchange)
     except Exception:
-        return fetch_us_quote_yfinance(ticker)
+        base_quote = Quote(
+            ticker=ticker.strip().upper(),
+            market="US",
+            price=None,
+            currency="USD",
+            source="google_finance",
+        )
+
+    yf_quote = None
+    try:
+        yf_quote = fetch_us_quote_yfinance(ticker)
+    except Exception:
+        yf_quote = None
+
+    if yf_quote:
+        price = base_quote.price if base_quote and base_quote.price is not None else yf_quote.price
+        source = "google_finance+yfinance" if base_quote and base_quote.price is not None else "yfinance"
+        return Quote(
+            ticker=yf_quote.ticker,
+            market="US",
+            price=price,
+            currency=yf_quote.currency,
+            source=source,
+            open_price=yf_quote.open_price,
+            high_price=yf_quote.high_price,
+            low_price=yf_quote.low_price,
+            pe_ratio=yf_quote.pe_ratio,
+            dividend_yield=yf_quote.dividend_yield,
+            shares_outstanding=yf_quote.shares_outstanding,
+        )
+
+    if base_quote:
+        return base_quote
+
+    return Quote(ticker=ticker.strip().upper(), market="US", price=None, currency="USD", source="google_finance")
 
 
 def fetch_nz_quote_nzx(ticker: str) -> Quote:
@@ -140,7 +175,10 @@ def fetch_nz_quote_fallback(ticker: str, fallback_prices: dict[str, float]) -> Q
 
 def fetch_nz_quote(ticker: str, fallback_prices: Optional[dict[str, float]] = None) -> Quote:
     try:
-        return fetch_nz_quote_nzx(ticker)
+        nzx_quote = fetch_nz_quote_nzx(ticker)
+        if nzx_quote.price is None and fallback_prices is not None:
+            return fetch_nz_quote_fallback(ticker, fallback_prices)
+        return nzx_quote
     except Exception:
         if fallback_prices is not None:
             return fetch_nz_quote_fallback(ticker, fallback_prices)

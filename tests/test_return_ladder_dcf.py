@@ -1,9 +1,16 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from src.services.market_data import parse_google_finance_html, parse_nzx_html
-from src.services.return_ladder_dcf import DCFInputs, build_dcf, build_summary_row
+from src.services.return_ladder_dcf import (
+    DCFInputs,
+    build_dcf,
+    build_summary_row,
+    coerce_inputs_df,
+    validate_rows,
+)
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -51,3 +58,25 @@ def test_summary_zone():
     result = build_dcf(inputs, [0.10])
     summary = build_summary_row(inputs, result, 0.10, zone_green=0.2, zone_red=-0.2)
     assert summary["Zone"] == "Green"
+
+
+def test_coerce_and_validate_years():
+    df = coerce_inputs_df(
+        pd.DataFrame(
+            [
+                {
+                    "ticker": "ABC",
+                    "market": "US",
+                    "years_to_exit": "5",
+                    "exit_multiple": "20",
+                    "growth_rate": "0.05",
+                    "fcf_year0": "100",
+                    "shares_out": "0",
+                }
+            ]
+        )
+    )
+    rows = df.to_dict(orient="records")
+    errors, warnings = validate_rows(rows)
+    assert errors == []
+    assert any("shares_out missing" in msg for msg in warnings)

@@ -5,7 +5,13 @@ import streamlit as st
 
 from src.data.sheets import get_gspread_client
 from src.services.market_data import fetch_nz_quote, fetch_us_quote
-from src.services.return_ladder_dcf import DCFInputs, build_dcf, build_summary_row
+from src.services.return_ladder_dcf import (
+    DCFInputs,
+    build_dcf,
+    build_summary_row,
+    coerce_inputs_df,
+    validate_rows,
+)
 
 
 st.set_page_config(page_title="NZ Wealth Manager Pro - Return Ladder", page_icon="🪜", layout="wide")
@@ -39,6 +45,17 @@ def _parse_price(value: str) -> float | None:
         return float(str(value).replace(",", "").strip())
     except ValueError:
         return None
+
+
+def _should_overwrite(value) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        pass
+    return float(value) == 0.0
 
 
 @st.cache_data(ttl=3600)
@@ -178,6 +195,7 @@ edited = st.data_editor(
         "exit_multiple": st.column_config.NumberColumn(format="%.2f"),
     },
 )
+edited = coerce_inputs_df(edited)
 st.session_state["return_ladder_rows"] = edited
 
 rows = edited.to_dict(orient="records")
@@ -194,22 +212,30 @@ for row in rows:
     quote = quotes.get((ticker, market))
     if quote:
         row["quote_source"] = quote.source
-        if quote.price is not None:
+        if quote.price is not None and _should_overwrite(row.get("current_price")):
             row["current_price"] = quote.price
-        if quote.shares_outstanding and (row.get("shares_out") or 0) in (0, 0.0):
+        if quote.shares_outstanding and _should_overwrite(row.get("shares_out")):
             row["shares_out"] = float(quote.shares_outstanding)
     updated_rows.append(row)
 
-st.session_state["return_ladder_rows"] = pd.DataFrame(updated_rows)
+updated_df = coerce_inputs_df(pd.DataFrame(updated_rows))
+st.session_state["return_ladder_rows"] = updated_df
 
 summary_rows = []
 results = {}
 errors = []
 
-for row in updated_rows:
+row_errors, row_warnings = validate_rows(updated_df.to_dict(orient="records"))
+if row_warnings:
+    st.warning("Warnings:\n" + "\n".join(f"- {w}" for w in row_warnings))
+error_tickers = {msg.split(":", 1)[0] for msg in row_errors}
+
+for row in updated_df.to_dict(orient="records"):
     ticker = str(row.get("ticker", "")).strip().upper()
     market = str(row.get("market", "")).strip().upper()
     if not ticker or not market:
+        continue
+    if ticker in error_tickers:
         continue
 
     try:
@@ -224,8 +250,8 @@ for row in updated_rows:
             exit_multiple=float(row.get("exit_multiple") or 0),
             growth_rate=float(row.get("growth_rate") or 0),
         )
-        if inputs.shares_out <= 0 or inputs.years <= 0:
-            errors.append(f"{ticker}: shares_out and years_to_exit must be greater than 0.")
+        if inputs.years <= 0:
+            errors.append(f"{ticker}: years_to_exit must be greater than 0.")
             continue
         result = build_dcf(inputs, required_returns)
         results[ticker] = result
@@ -233,8 +259,11 @@ for row in updated_rows:
     except Exception as exc:
         errors.append(f"{ticker}: {exc}")
 
-if errors:
-    st.error("Input errors:\n" + "\n".join(f"- {e}" for e in errors))
+if row_errors or errors:
+    st.error(
+        "Input errors:\n"
+        + "\n".join(f"- {e}" for e in (row_errors + errors))
+    )
 
 st.subheader("Summary")
 if summary_rows:
@@ -244,7 +273,8 @@ if summary_rows:
     summary_df = summary_df[display_cols]
     st.dataframe(
         summary_df.style.format(
-            {**{c: "${:,.2f}" for c in fv_cols}, "Current Price": "${:,.2f}", "Upside @ Base": "{:+.1%}"}
+            {**{c: "${:,.2f}" for c in fv_cols}, "Current Price": "${:,.2f}", "Upside @ Base": "{:+.1%}"},
+            na_rep="N/A",
         ),
         use_container_width=True,
     )
@@ -278,7 +308,8 @@ for ticker, result in results.items():
                     "Enterprise Value": "${:,.0f}",
                     "Equity Value": "${:,.0f}",
                     "Fair Value / Share": "${:,.2f}",
-                }
+                },
+                na_rep="N/A",
             ),
             use_container_width=True,
         )
