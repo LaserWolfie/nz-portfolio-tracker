@@ -2,8 +2,8 @@ import streamlit as st
 
 from src.services.return_ladder import LadderInputs, build_ladder
 
-st.set_page_config(page_title="Return Ladder", page_icon="🪜", layout="wide")
-st.title("🪜 Return Ladder")
+st.set_page_config(page_title="NZ Wealth Manager Pro — Return Ladder", page_icon="🪜", layout="wide")
+st.title("🪜 NZ Wealth Manager Pro — Return Ladder")
 st.caption("Estimate implied share prices from FCF growth and exit multiple scenarios.")
 
 st.sidebar.header("Ladder Inputs")

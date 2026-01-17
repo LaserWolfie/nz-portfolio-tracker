@@ -13,7 +13,7 @@ import json
 from modules import utils
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
+st.set_page_config(page_title="NZ Wealth Manager Pro — Property Forensics", page_icon="🏢", layout="wide")
 
 # --- CUSTOM CSS ---
 st.markdown("""
@@ -152,7 +152,7 @@ df['Scenario_Yield'] = (df['Scenario_Distribution'] / df['Original_Value'] * 100
 scenario_label = f"{rate_adjustment:+.2f}% Rates" if rate_adjustment != 0 else "Current Rates"
 
 # --- DASHBOARD LAYOUT ---
-st.title("🏢 Property Forensics")
+st.title("🏢 NZ Wealth Manager Pro — Property Forensics")
 
 # Create Tabs to separate View vs Input
 tab_dash, tab_upload = st.tabs(["📊 Portfolio Dashboard", "📄 Upload Report (AI Scanner)"])

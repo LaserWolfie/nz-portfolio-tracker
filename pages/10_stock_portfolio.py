@@ -146,7 +146,7 @@ else:
     macro_data, hist_raw, nzx_returns, nzx_1y_val = fetch_macro_history_benchmark()
     st.session_state["stock_macro_cache"] = (macro_data, hist_raw, nzx_returns, nzx_1y_val)
 
-st.title("🥝 NZ Portfolio Analyzer")
+st.title("🥝 NZ Wealth Manager Pro — Stock Portfolio")
 
 # 3. MACRO ENGINE
 if macro_data and macro_data.get('status'):

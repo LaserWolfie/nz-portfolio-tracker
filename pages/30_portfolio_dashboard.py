@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 from modules import utils
 
-st.set_page_config(page_title="Portfolio Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="NZ Wealth Manager Pro — Portfolio Dashboard", page_icon="📊", layout="wide")
 
 # Helper for numbers
 def clean_number(x):
@@ -22,7 +22,7 @@ df['Current_Value'] = df['Current_Value'].apply(clean_number)
 df['Original_Value'] = df['Original_Value'].apply(clean_number)
 df['Annual_Distribution'] = df['Annual_Distribution'].apply(clean_number)
 
-st.title("📊 Portfolio Dashboard")
+st.title("📊 NZ Wealth Manager Pro — Portfolio Dashboard")
 
 # --- PORTFOLIO SEGMENTATION ---
 parents_df = df[df['Owner_Entity'] != 'Gold Recovery Ltd']

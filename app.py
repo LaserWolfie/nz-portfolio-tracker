@@ -101,7 +101,7 @@ if debug_show_dataframes:
     st.dataframe(stock_df.head(20))
 
 # --- 5. DASHBOARD SUMMARY ---
-st.title("💰 NZ Wealth Manager: Pro Edition")
+st.title("💰 NZ Wealth Manager Pro")
 st.subheader("Total Wilson Family Assets and Income")
 
 if not stock_df.empty:
