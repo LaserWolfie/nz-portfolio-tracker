@@ -117,6 +117,8 @@ def _fetch_quotes(rows: list[dict], nzx_fallback: dict[str, float], refresh_toke
 
         if quote.price is None:
             warnings.append(f"{ticker}: price not found from {quote.source}.")
+        if market == "NZ" and quote.shares_outstanding is None and _should_overwrite(row.get("shares_out")):
+            warnings.append(f"{ticker}: NZX missing Securities Issued; shares_out not updated.")
 
         quotes[(ticker, market)] = quote
     return quotes, warnings

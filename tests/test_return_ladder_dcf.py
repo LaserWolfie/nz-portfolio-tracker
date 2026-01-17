@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.services.market_data import parse_google_finance_html, parse_nzx_html
+from src.services.market_data import parse_google_finance_html, parse_nzx_html, parse_nzx_instrument_html
 from src.services.return_ladder_dcf import (
     DCFInputs,
     build_dcf,
@@ -24,6 +24,12 @@ def test_parse_google_finance_html():
 def test_parse_nzx_html():
     html = (FIXTURES / "nzx_sample.html").read_text(encoding="utf-8")
     assert parse_nzx_html(html) == 5.67
+
+
+def test_parse_nzx_securities_issued():
+    html = (FIXTURES / "nzx_sample.html").read_text(encoding="utf-8")
+    data = parse_nzx_instrument_html(html)
+    assert data["shares_outstanding"] == 1234567890.0
 
 
 def test_dcf_math_sanity():

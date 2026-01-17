@@ -23,6 +23,7 @@ class Quote:
     pe_ratio: Optional[float] = None
     dividend_yield: Optional[float] = None
     shares_outstanding: Optional[float] = None
+    market_cap: Optional[float] = None
 
 
 def _parse_float(value: str) -> Optional[float]:
@@ -36,6 +37,42 @@ def _parse_float(value: str) -> Optional[float]:
         return float(match.group(0))
     except ValueError:
         return None
+
+
+def _parse_int(value: str) -> Optional[int]:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^\d\-]", "", str(value))
+    if cleaned in ("", "-", "--"):
+        return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
+def _extract_label_value(soup: BeautifulSoup, label: str) -> Optional[str]:
+    target = soup.find(string=re.compile(rf"^{re.escape(label)}$", re.I))
+    if not target:
+        return None
+
+    if target.parent and target.parent.name == "dt":
+        sibling = target.parent.find_next_sibling("dd")
+        if sibling:
+            return sibling.get_text(strip=True)
+
+    if target.parent and target.parent.name in {"th", "td"}:
+        sibling = target.parent.find_next_sibling("td")
+        if sibling:
+            return sibling.get_text(strip=True)
+
+    row = target.parent.find_parent("tr") if target.parent else None
+    if row:
+        cells = row.find_all(["td", "th"])
+        if len(cells) >= 2:
+            return cells[1].get_text(strip=True)
+
+    return None
 
 
 def parse_google_finance_html(html: str) -> Optional[float]:
@@ -54,6 +91,35 @@ def parse_google_finance_html(html: str) -> Optional[float]:
         return _parse_float(meta_price.get("content"))
 
     return None
+
+
+def parse_nzx_instrument_html(html: str) -> dict[str, Optional[float]]:
+    soup = BeautifulSoup(html, "html.parser")
+
+    price = parse_nzx_html(html)
+    securities_issued = _parse_int(_extract_label_value(soup, "Securities Issued"))
+    open_price = _parse_float(_extract_label_value(soup, "Open"))
+    high_price = _parse_float(_extract_label_value(soup, "High"))
+    low_price = _parse_float(_extract_label_value(soup, "Low"))
+    pe_ratio = _parse_float(_extract_label_value(soup, "P/E"))
+
+    div_yield_text = _extract_label_value(soup, "Gross Div Yield")
+    div_yield = _parse_float(div_yield_text) if div_yield_text else None
+
+    cap_text = _extract_label_value(soup, "Capitalisation (000s)")
+    cap_value = _parse_float(cap_text)
+    market_cap = cap_value * 1000 if cap_value is not None else None
+
+    return {
+        "price": price,
+        "shares_outstanding": float(securities_issued) if securities_issued is not None else None,
+        "open_price": open_price,
+        "high_price": high_price,
+        "low_price": low_price,
+        "pe_ratio": pe_ratio,
+        "dividend_yield": div_yield,
+        "market_cap": market_cap,
+    }
 
 
 def parse_nzx_html(html: str) -> Optional[float]:
@@ -111,6 +177,7 @@ def fetch_us_quote_yfinance(ticker: str) -> Quote:
         pe_ratio=info.get("trailingPE"),
         dividend_yield=(info.get("dividendYield") or 0) * 100 if info.get("dividendYield") else None,
         shares_outstanding=info.get("sharesOutstanding"),
+        market_cap=info.get("marketCap"),
     )
 
 
@@ -163,8 +230,21 @@ def fetch_nz_quote_nzx(ticker: str) -> Quote:
     resp = requests.get(url, headers=headers, timeout=15)
     resp.raise_for_status()
 
-    price = parse_nzx_html(resp.text)
-    return Quote(ticker=symbol, market="NZ", price=price, currency="NZD", source="nzx")
+    data = parse_nzx_instrument_html(resp.text)
+    return Quote(
+        ticker=symbol,
+        market="NZ",
+        price=data.get("price"),
+        currency="NZD",
+        source="nzx",
+        open_price=data.get("open_price"),
+        high_price=data.get("high_price"),
+        low_price=data.get("low_price"),
+        pe_ratio=data.get("pe_ratio"),
+        dividend_yield=data.get("dividend_yield"),
+        shares_outstanding=data.get("shares_outstanding"),
+        market_cap=data.get("market_cap"),
+    )
 
 
 def fetch_nz_quote_fallback(ticker: str, fallback_prices: dict[str, float]) -> Quote:
