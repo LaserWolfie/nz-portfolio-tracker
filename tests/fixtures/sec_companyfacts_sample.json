@@ -1,0 +1,34 @@
+{
+  "facts": {
+    "us-gaap": {
+      "CashAndCashEquivalentsAtCarryingValue": {
+        "units": {
+          "USD": [
+            {"end": "2023-09-30", "val": 5000}
+          ]
+        }
+      },
+      "ShortTermInvestments": {
+        "units": {
+          "USD": [
+            {"end": "2023-09-30", "val": 2000}
+          ]
+        }
+      },
+      "DebtCurrent": {
+        "units": {
+          "USD": [
+            {"end": "2023-09-30", "val": 1000}
+          ]
+        }
+      },
+      "LongTermDebt": {
+        "units": {
+          "USD": [
+            {"end": "2023-09-30", "val": 3000}
+          ]
+        }
+      }
+    }
+  }
+}

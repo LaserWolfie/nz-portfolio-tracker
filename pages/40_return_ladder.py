@@ -4,6 +4,12 @@ import pandas as pd
 import streamlit as st
 
 from src.data.sheets import get_gspread_client
+from src.services.fundamentals import (
+    compute_net_cash_from_companyfacts,
+    fetch_sec_companyfacts,
+    fetch_sec_company_tickers,
+    get_cik_for_ticker,
+)
 from src.services.market_data import fetch_nz_quote, fetch_us_quote
 from src.services.return_ladder_dcf import (
     DCFInputs,
@@ -138,6 +144,8 @@ def _default_rows() -> pd.DataFrame:
                 "years_to_exit": 5,
                 "exit_multiple": 20.0,
                 "growth_rate": 0.05,
+                "net_cash_source": "",
+                "net_cash_currency": "",
                 "quote_source": "",
             },
             {
@@ -151,6 +159,8 @@ def _default_rows() -> pd.DataFrame:
                 "years_to_exit": 5,
                 "exit_multiple": 18.0,
                 "growth_rate": 0.04,
+                "net_cash_source": "",
+                "net_cash_currency": "",
                 "quote_source": "",
             },
         ]
@@ -179,6 +189,16 @@ if refresh:
 
 refresh_token = st.session_state.get("quotes_refresh_token", 0.0)
 
+
+@st.cache_data(ttl=3600)
+def _load_sec_tickers():
+    return fetch_sec_company_tickers()
+
+
+@st.cache_data(ttl=3600)
+def _load_sec_companyfacts(cik: str):
+    return fetch_sec_companyfacts(cik)
+
 st.subheader("Inputs")
 if "return_ladder_rows" not in st.session_state:
     st.session_state["return_ladder_rows"] = _default_rows()
@@ -195,6 +215,8 @@ edited = st.data_editor(
         "fcf_year0": st.column_config.NumberColumn(format="%.0f"),
         "growth_rate": st.column_config.NumberColumn(format="%.2%"),
         "exit_multiple": st.column_config.NumberColumn(format="%.2f"),
+        "net_cash_source": st.column_config.TextColumn("net_cash_source", disabled=True),
+        "net_cash_currency": st.column_config.TextColumn("net_cash_currency", disabled=True),
     },
 )
 edited = coerce_inputs_df(edited)
@@ -223,16 +245,71 @@ for row in rows:
 updated_df = coerce_inputs_df(pd.DataFrame(updated_rows))
 st.session_state["return_ladder_rows"] = updated_df
 
+fundamentals_warnings = []
+try:
+    sec_tickers = _load_sec_tickers()
+except Exception as exc:
+    sec_tickers = None
+    fundamentals_warnings.append(f"SEC ticker list unavailable: {exc}")
+
+final_rows = []
+for row in updated_df.to_dict(orient="records"):
+    ticker = str(row.get("ticker", "")).strip().upper()
+    market = str(row.get("market", "")).strip().upper()
+    if market != "US" or not ticker:
+        if market == "NZ" and _should_overwrite(row.get("net_cash_or_debt")):
+            fundamentals_warnings.append(
+                f"{ticker}: Net cash/debt requires statements data; enter manually for NZ tickers."
+            )
+        final_rows.append(row)
+        continue
+
+    if not _should_overwrite(row.get("net_cash_or_debt")):
+        final_rows.append(row)
+        continue
+
+    if sec_tickers is None:
+        final_rows.append(row)
+        continue
+
+    cik = get_cik_for_ticker(ticker, sec_tickers)
+    if not cik:
+        fundamentals_warnings.append(f"{ticker}: SEC CIK not found.")
+        final_rows.append(row)
+        continue
+
+    try:
+        facts = _load_sec_companyfacts(cik)
+        net_cash, currency = compute_net_cash_from_companyfacts(facts)
+        if net_cash is None:
+            fundamentals_warnings.append(
+                f"{ticker}: Net cash/debt not found in SEC facts; enter manually."
+            )
+        else:
+            row["net_cash_or_debt"] = float(net_cash)
+            row["net_cash_source"] = "sec_xbrl"
+            row["net_cash_currency"] = currency or "USD"
+    except Exception as exc:
+        fundamentals_warnings.append(f"{ticker}: SEC facts fetch failed ({exc}).")
+
+    final_rows.append(row)
+
+final_df = coerce_inputs_df(pd.DataFrame(final_rows))
+st.session_state["return_ladder_rows"] = final_df
+
+if fundamentals_warnings:
+    st.warning("Fundamentals warnings:\n" + "\n".join(f"- {w}" for w in fundamentals_warnings))
+
 summary_rows = []
 results = {}
 errors = []
 
-row_errors, row_warnings = validate_rows(updated_df.to_dict(orient="records"))
+row_errors, row_warnings = validate_rows(final_df.to_dict(orient="records"))
 if row_warnings:
     st.warning("Warnings:\n" + "\n".join(f"- {w}" for w in row_warnings))
 error_tickers = {msg.split(":", 1)[0] for msg in row_errors}
 
-for row in updated_df.to_dict(orient="records"):
+for row in final_df.to_dict(orient="records"):
     ticker = str(row.get("ticker", "")).strip().upper()
     market = str(row.get("market", "")).strip().upper()
     if not ticker or not market:
