@@ -23,6 +23,7 @@ def init_connection():
 
 def robust_numeric_clean(df, column_name):
     """Safely converts a spreadsheet column to numbers, handling symbols and errors."""
+    df = df.copy()
     if column_name in df.columns:
         clean_col = (
             df[column_name].astype(str)
@@ -31,7 +32,7 @@ def robust_numeric_clean(df, column_name):
             .str.strip()
             .replace(['#N/A', '#VALUE!', '#DIV/0!', 'None', 'nan', '', '-'], '0')
         )
-        df[column_name] = pd.to_numeric(clean_col, errors='coerce').fillna(0)
+        df.loc[:, column_name] = pd.to_numeric(clean_col, errors='coerce').fillna(0)
     return df
 
 @st.cache_data(ttl=600)
