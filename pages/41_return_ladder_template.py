@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import re
 from typing import List
 
 import pandas as pd
 import streamlit as st
-from gspread.utils import rowcol_to_a1
 
 from src.data.sheets import get_gspread_client
+from src.services.return_ladder_app_inputs import (
+    APP_INPUTS_HEADERS as APP_INPUTS_SCHEMA_HEADERS,
+    ensure_app_inputs_schema,
+    seed_app_inputs_formulas,
+)
+from src.services.sec_fundamentals import (
+    SEC_USER_AGENT_HELP,
+    SEC_FACTS_URL,
+    fetch_us_fundamentals,
+    get_net_cash_debt_bn,
+    get_sec_headers,
+    get_sec_user_agent,
+)
+from src.services.nzx_instruments import get_nzx_snapshot
+from src.services.sources_registry import find_best_source, load_sources
 
 
 st.set_page_config(page_title="Return Ladder (Template Viewer)", page_icon="\U0001F4C4", layout="wide")
@@ -16,27 +31,17 @@ st.set_page_config(page_title="Return Ladder (Template Viewer)", page_icon="\U00
 st.title("Return Ladder (Template Viewer)")
 st.caption("Template viewer with app-side DCF calculations and write-back to app tabs.")
 
+logger = logging.getLogger(__name__)
+
 APP_TICKERS_TAB = "APP_TICKERS"
 APP_INPUTS_TAB = "APP_INPUTS"
 APP_SOURCES_TAB = "APP_SOURCES"
 
 APP_TICKERS_HEADERS = ["Ticker", "Market", "Active", "AddedAt"]
-APP_INPUTS_HEADERS = [
-    "Company",
-    "Ticker",
-    "Market",
-    "CCY",
-    "Price",
-    "Shares (bn)",
-    "Net cash/(debt) (bn)",
-    "FCF1 (next-year, bn)",
-    "g (Y1-Y5)",
-    "N (yrs)",
-    "g terminal",
-    "Notes",
-    "Links",
-]
+APP_INPUTS_HEADERS = APP_INPUTS_SCHEMA_HEADERS
 APP_SOURCES_HEADERS = ["Ticker", "Metric", "URL", "Notes", "UpdatedAt"]
+SOURCES_LOG_TAB = "SOURCES_LOG"
+SOURCES_LOG_HEADERS = ["Timestamp", "Ticker", "Field", "Value", "SourceURL"]
 
 REQUIRED_RETURNS = [0.08, 0.10, 0.15, 0.20]
 
@@ -86,9 +91,9 @@ def _ensure_app_tabs(sheet_id: str, ensure_headers: bool = False):
         inputs_ws = worksheets[APP_INPUTS_TAB]
     else:
         inputs_ws = ss.add_worksheet(title=APP_INPUTS_TAB, rows=200, cols=len(APP_INPUTS_HEADERS) + 5)
-        _ensure_headers(inputs_ws, APP_INPUTS_HEADERS, assume_empty=True)
+        ensure_app_inputs_schema(inputs_ws)
     if ensure_headers:
-        _ensure_headers(inputs_ws, APP_INPUTS_HEADERS)
+        ensure_app_inputs_schema(inputs_ws)
 
     if APP_SOURCES_TAB in worksheets:
         sources_ws = worksheets[APP_SOURCES_TAB]
@@ -97,7 +102,6 @@ def _ensure_app_tabs(sheet_id: str, ensure_headers: bool = False):
         _ensure_headers(sources_ws, APP_SOURCES_HEADERS, assume_empty=True)
     if ensure_headers:
         _ensure_headers(sources_ws, APP_SOURCES_HEADERS)
-
     return ss, tickers_ws, inputs_ws, sources_ws
 
 
@@ -119,7 +123,7 @@ def _map_inputs_df(df: pd.DataFrame) -> pd.DataFrame:
         "market": "Market",
         "ccy": "CCY",
         "price": "Price",
-        "sharesbn": "Shares (bn)",
+        "sharesbn": "Shares_bn",
         "netcashdebtbn": "Net cash/(debt) (bn)",
         "netcashbn": "Net cash/(debt) (bn)",
         "fcf1nextyearbn": "FCF1 (next-year, bn)",
@@ -129,7 +133,7 @@ def _map_inputs_df(df: pd.DataFrame) -> pd.DataFrame:
         "nyrs": "N (yrs)",
         "nyears": "N (yrs)",
         "n": "N (yrs)",
-        "gterminal": "g terminal",
+        "gterminal": "g_terminal",
         "notes": "Notes",
         "links": "Links",
     }
@@ -218,6 +222,16 @@ def _safe_float(value, default=0.0) -> float:
     return parsed if parsed is not None else default
 
 
+def _is_blank_or_zero(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    parsed = _parse_float(text)
+    return parsed is None or parsed == 0.0
+
+
 def _find_col_index(headers: list[str], target: str) -> int | None:
     target_norm = _normalize(target)
     for idx, header in enumerate(headers):
@@ -244,101 +258,6 @@ def _parse_timestamp(value: str) -> datetime | None:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
-
-
-def _col_letter(col_idx: int) -> str:
-    return re.sub(r"\d", "", rowcol_to_a1(1, col_idx))
-
-
-def _get_sec_headers() -> dict:
-    user_agent = str(st.secrets.get("sec_user_agent", "")).strip()
-    if not user_agent:
-        raise RuntimeError("sec_user_agent missing in secrets")
-    return {
-        "User-Agent": user_agent,
-        "Accept-Encoding": "gzip, deflate",
-        "Host": "data.sec.gov",
-    }
-
-
-def _fetch_json(url: str, headers: dict) -> dict:
-    import requests
-
-    resp = requests.get(url, headers=headers, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _load_ticker_cik_map(headers: dict) -> dict[str, str]:
-    data = _fetch_json("https://www.sec.gov/files/company_tickers.json", headers)
-    mapping = {}
-    for entry in data.values():
-        ticker = str(entry.get("ticker", "")).strip().upper()
-        cik = str(entry.get("cik_str", "")).zfill(10)
-        if ticker and cik:
-            mapping[ticker] = cik
-    return mapping
-
-
-def _latest_annual_value(facts: dict, tag: str) -> float | None:
-    units = (facts.get("us-gaap", {}).get(tag, {}) or {}).get("units", {})
-    entries = []
-    for unit_values in units.values():
-        for item in unit_values:
-            form = str(item.get("form", "")).upper()
-            fp = str(item.get("fp", "")).upper()
-            fy = item.get("fy")
-            val = item.get("val")
-            if form not in {"10-K", "10-K/A"} or fp != "FY":
-                continue
-            if val is None:
-                continue
-            entries.append((fy or 0, item.get("end", ""), val))
-    if not entries:
-        return None
-    entries.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return float(entries[0][2])
-
-
-def _first_available_value(facts: dict, tags: list[str]) -> float | None:
-    for tag in tags:
-        value = _latest_annual_value(facts, tag)
-        if value is not None:
-            return value
-    return None
-
-
-def _fetch_us_fundamentals(ticker: str, headers: dict, cik_map: dict[str, str]) -> dict:
-    cik = cik_map.get(ticker)
-    if not cik:
-        raise RuntimeError(f"CIK not found for {ticker}")
-    facts = _fetch_json(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json", headers).get("facts", {})
-
-    cash = _first_available_value(
-        facts,
-        [
-            "CashAndCashEquivalentsAtCarryingValue",
-            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-        ],
-    )
-    debt_current = _first_available_value(facts, ["DebtCurrent", "ShortTermBorrowings"])
-    debt_long = _first_available_value(facts, ["LongTermDebt", "LongTermDebtNoncurrent"])
-    total_debt = (debt_current or 0.0) + (debt_long or 0.0)
-
-    cfo = _first_available_value(facts, ["NetCashProvidedByUsedInOperatingActivities"])
-    capex = _first_available_value(facts, ["PaymentsToAcquirePropertyPlantAndEquipment"])
-    if capex is not None:
-        capex = abs(capex)
-
-    net_cash = None if cash is None else (cash - total_debt)
-    fcf = None
-    if cfo is not None and capex is not None:
-        fcf = cfo - capex
-
-    return {
-        "net_cash_bn": None if net_cash is None else net_cash / 1e9,
-        "fcf1_bn": None if fcf is None else fcf / 1e9,
-    }
 
 
 def _last_non_empty_row(values: list[list[str]], col_idx: int | None) -> int:
@@ -410,110 +329,84 @@ def _seed_sources(sources_ws, ticker: str, market: str):
         sources_ws.append_rows(rows, value_input_option="USER_ENTERED")
 
 
-def _copy_formula_row(inputs_ws, target_row: int, header: list[str], ticker: str, market: str):
-    sheet_id = inputs_ws._properties.get("sheetId")
-    if sheet_id is None:
-        raise RuntimeError("Could not determine sheetId for APP_INPUTS")
+def _append_sources_rows(sources_ws, rows: list[list[str]]):
+    if rows:
+        sources_ws.append_rows(rows, value_input_option="USER_ENTERED")
 
-    col_count = max(len(header), inputs_ws.col_count)
 
-    inputs_ws.spreadsheet.batch_update(
-        {
-            "requests": [
-                {
-                    "copyPaste": {
-                        "source": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": 1,
-                            "endRowIndex": 2,
-                            "startColumnIndex": 0,
-                            "endColumnIndex": col_count,
-                        },
-                        "destination": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": target_row - 1,
-                            "endRowIndex": target_row,
-                            "startColumnIndex": 0,
-                            "endColumnIndex": col_count,
-                        },
-                        "pasteType": "PASTE_FORMULA",
-                        "pasteOrientation": "NORMAL",
-                    }
-                }
-            ]
-        }
-    )
+def _ensure_sources_log(ss):
+    for ws in ss.worksheets():
+        if ws.title == SOURCES_LOG_TAB:
+            return ws
+    ws = ss.add_worksheet(title=SOURCES_LOG_TAB, rows=500, cols=len(SOURCES_LOG_HEADERS) + 2)
+    _ensure_headers(ws, SOURCES_LOG_HEADERS, assume_empty=True)
+    return ws
+
+
+def _append_sources_log(ss, rows: list[list[str]]):
+    if not rows:
+        return
+    log_ws = _ensure_sources_log(ss)
+    log_ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+def _append_inputs_row(inputs_ws, ticker: str, market: str) -> int | None:
+    values = inputs_ws.get_all_values()
+    if not values or len(values) < 1:
+        raise RuntimeError("APP_INPUTS must have a header row.")
+    header = values[0]
+    ticker_col = _find_col_index(header, "Ticker")
+    last_row = _last_non_empty_row(values, ticker_col)
+    target_row = last_row + 1
+
+    if target_row > inputs_ws.row_count:
+        inputs_ws.add_rows(target_row - inputs_ws.row_count)
 
     updates = []
-    ticker_col = _find_col_index(header, "Ticker")
-    market_col = _find_col_index(header, "Market")
-    company_col = _find_col_index(header, "Company")
-    notes_col = _find_col_index(header, "Notes")
-    links_col = _find_col_index(header, "Links")
-
     if ticker_col is not None:
         updates.append((target_row, ticker_col + 1, ticker))
+    market_col = _find_col_index(header, "Market")
     if market_col is not None:
         updates.append((target_row, market_col + 1, market))
-    if company_col is not None:
-        updates.append((target_row, company_col + 1, ""))
-    if notes_col is not None:
-        updates.append((target_row, notes_col + 1, ""))
-    if links_col is not None:
-        updates.append((target_row, links_col + 1, ""))
-
     if updates:
         cell_list = [inputs_ws.cell(row, col) for row, col, _ in updates]
         for cell, (_, _, value) in zip(cell_list, updates):
             cell.value = value
         inputs_ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+    return target_row
 
 
-def _append_inputs_row(inputs_ws, ticker: str, market: str):
-    values = inputs_ws.get_all_values()
-    if not values or len(values) < 1:
-        raise RuntimeError("APP_INPUTS must have a header row.")
-    header = values[0]
-    template_row = values[1] if len(values) > 1 else []
-    has_template = any(str(cell).strip() for cell in template_row)
-
-    ticker_col = _find_col_index(header, "Ticker")
-    last_row = _last_non_empty_row(values, ticker_col)
-    target_row = last_row + 1
-
-    if has_template:
-        if target_row <= inputs_ws.row_count:
-            if len(values) >= target_row and any(str(cell).strip() for cell in values[target_row - 1]):
-                inputs_ws.spreadsheet.batch_update(
-                    {
-                        "requests": [
-                            {
-                                "insertDimension": {
-                                    "range": {
-                                        "sheetId": inputs_ws._properties.get("sheetId"),
-                                        "dimension": "ROWS",
-                                        "startIndex": target_row - 1,
-                                        "endIndex": target_row,
-                                    },
-                                    "inheritFromBefore": False,
-                                }
-                            }
-                        ]
-                    }
-                )
-        else:
-            inputs_ws.add_rows(target_row - inputs_ws.row_count)
-
-        _copy_formula_row(inputs_ws, target_row, header, ticker, market)
-        return
-
-    row_values = [""] * len(header)
-    if ticker_col is not None:
-        row_values[ticker_col] = ticker
+def _set_inputs_market_value(inputs_ws, row_idx: int, market: str):
+    header = inputs_ws.row_values(1)
     market_col = _find_col_index(header, "Market")
-    if market_col is not None:
-        row_values[market_col] = market
-    inputs_ws.append_row(row_values, value_input_option="USER_ENTERED")
+    if market_col is None:
+        return
+    cell = inputs_ws.cell(row_idx, market_col + 1)
+    cell.value = market
+    inputs_ws.update_cells([cell], value_input_option="USER_ENTERED")
+
+
+def _force_market_for_ticker(inputs_ws, ticker: str, market: str):
+    values = inputs_ws.get_all_values()
+    if not values:
+        return
+    header = values[0]
+    ticker_col = _find_col_index(header, "Ticker")
+    market_col = _find_col_index(header, "Market")
+    if ticker_col is None or market_col is None:
+        return
+    updates = []
+    for row_idx, row in enumerate(values[1:], start=2):
+        if ticker_col >= len(row):
+            continue
+        row_ticker = str(row[ticker_col]).strip().upper()
+        if row_ticker == str(ticker).strip().upper():
+            updates.append((row_idx, market_col + 1, market))
+    if updates:
+        cells = [inputs_ws.cell(r, c) for r, c, _ in updates]
+        for cell, (_, _, value) in zip(cells, updates):
+            cell.value = value
+        inputs_ws.update_cells(cells, value_input_option="USER_ENTERED")
 
 
 def _set_ticker_active(tickers_ws, ticker: str, active: bool):
@@ -666,94 +559,9 @@ def _dedupe_sources_ws(sources_ws) -> int:
     return len(set(delete_rows))
 
 
-def _seed_app_inputs_formulas(inputs_ws):
-    header = inputs_ws.row_values(1)
-    if not header:
-        raise RuntimeError("APP_INPUTS header row is missing.")
-
-    row_idx = 2
-    ticker_col = _find_col_index(header, "Ticker")
-    market_col = _find_any_col_index(header, ["Market"])
-    company_col = _find_col_index(header, "Company")
-    ccy_col = _find_col_index(header, "CCY")
-    price_col = _find_col_index(header, "Price")
-    shares_col = _find_any_col_index(header, ["Shares (bn)", "Shares_bn"])
-    g_col = _find_any_col_index(header, ["g (Y1-Y5)", "g_y1y5", "g_1_5"])
-    n_col = _find_col_index(header, "N (yrs)")
-    g_terminal_col = _find_col_index(header, "g terminal")
-    net_cash_col = _find_any_col_index(header, ["Net cash/(debt) (bn)", "Net_cash_debt_bn", "NetCash_bn"])
-
-    if ticker_col is None:
-        raise RuntimeError("APP_INPUTS is missing the Ticker column.")
-
-    ticker_ref = f"${_col_letter(ticker_col + 1)}{row_idx}"
-    if market_col is not None:
-        market_ref = f"${_col_letter(market_col + 1)}{row_idx}"
-        market_formula = f'=IFERROR(VLOOKUP({ticker_ref}, APP_TICKERS!A:B, 2, FALSE), "")'
-    else:
-        market_ref = f"IFERROR(VLOOKUP({ticker_ref}, APP_TICKERS!A:B, 2, FALSE), \"\")"
-        market_formula = None
-
-    updates = []
-    if market_col is not None:
-        updates.append((row_idx, market_col + 1, market_formula))
-    if company_col is not None:
-        updates.append(
-            (
-                row_idx,
-                company_col + 1,
-                f'=IF({market_ref}="US", IFERROR(GOOGLEFINANCE({ticker_ref},"name"), ""), "")',
-            )
-        )
-    if ccy_col is not None:
-        updates.append(
-            (
-                row_idx,
-                ccy_col + 1,
-                f'=IF({market_ref}="NZ","NZD", IF({market_ref}="US","USD",""))',
-            )
-        )
-    if price_col is not None:
-        updates.append(
-            (
-                row_idx,
-                price_col + 1,
-                f'=IF({market_ref}="NZ", IFERROR(NZX_PRICE({ticker_ref}), ""), '
-                f'IFERROR(GOOGLEFINANCE({ticker_ref},"price"), ""))',
-            )
-        )
-    if shares_col is not None and price_col is not None:
-        price_ref = f"${_col_letter(price_col + 1)}{row_idx}"
-        updates.append(
-            (
-                row_idx,
-                shares_col + 1,
-                f'=IF({market_ref}="US", IFERROR(GOOGLEFINANCE({ticker_ref},"marketcap") / {price_ref} / 1e9, ""), "")',
-            )
-        )
-    if g_col is not None:
-        updates.append(
-            (
-                row_idx,
-                g_col + 1,
-                f'=IF({market_ref}="US", 0.06, IF({market_ref}="NZ", 0.03, ""))',
-            )
-        )
-    if net_cash_col is not None:
-        updates.append((row_idx, net_cash_col + 1, ""))
-    if n_col is not None:
-        updates.append((row_idx, n_col + 1, 5))
-    if g_terminal_col is not None:
-        updates.append((row_idx, g_terminal_col + 1, 0.03))
-
-    if updates:
-        cells = [inputs_ws.cell(r, c) for r, c, _ in updates]
-        for cell, (_, _, value) in zip(cells, updates):
-            cell.value = value
-        inputs_ws.update_cells(cells, value_input_option="USER_ENTERED")
 
 
-def _autofill_us_fundamentals(tickers_ws, inputs_ws, cache: dict) -> list[dict]:
+def _autofill_us_fundamentals(tickers_ws, inputs_ws, sources_ws, cache: dict, user_agent: str) -> list[dict]:
     tickers_values = tickers_ws.get_all_values()
     if not tickers_values:
         return [{"status": "error", "ticker": "", "message": "APP_TICKERS is empty."}]
@@ -779,15 +587,19 @@ def _autofill_us_fundamentals(tickers_ws, inputs_ws, cache: dict) -> list[dict]:
         return [{"status": "error", "ticker": "", "message": "APP_INPUTS is empty."}]
     inputs_header = inputs_values[0]
     inputs_ticker_col = _find_col_index(inputs_header, "Ticker")
+    company_col = _find_col_index(inputs_header, "Company")
+    shares_col = _find_col_index(inputs_header, "Shares_bn")
     net_cash_col = _find_col_index(inputs_header, "Net cash/(debt) (bn)")
     fcf1_col = _find_col_index(inputs_header, "FCF1 (next-year, bn)")
-    if inputs_ticker_col is None or net_cash_col is None or fcf1_col is None:
+    g_col = _find_col_index(inputs_header, "g (Y1-Y5)")
+    if inputs_ticker_col is None or fcf1_col is None:
         return [{"status": "error", "ticker": "", "message": "APP_INPUTS missing required columns."}]
 
-    headers = _get_sec_headers()
-    cik_map = _load_ticker_cik_map(headers)
+    headers = get_sec_headers(user_agent)
 
     updates = []
+    source_rows = []
+    log_rows = []
     results = []
     for row_idx, row in enumerate(inputs_values[1:], start=2):
         if inputs_ticker_col >= len(row):
@@ -799,30 +611,232 @@ def _autofill_us_fundamentals(tickers_ws, inputs_ws, cache: dict) -> list[dict]:
             data = cache[ticker]
         else:
             try:
-                data = _fetch_us_fundamentals(ticker, headers, cik_map)
+                data = fetch_us_fundamentals(ticker, headers)
                 cache[ticker] = data
             except Exception as exc:
                 results.append({"status": "error", "ticker": ticker, "message": str(exc)})
+                logger.exception("US fundamentals fetch failed for %s", ticker)
                 continue
-        updates.append((row_idx, net_cash_col + 1, data.get("net_cash_bn")))
-        updates.append((row_idx, fcf1_col + 1, data.get("fcf1_bn")))
-        results.append({"status": "ok", "ticker": ticker, "message": "updated"})
+
+        row_company = str(row[company_col]).strip() if company_col is not None and company_col < len(row) else ""
+        row_shares = str(row[shares_col]).strip() if shares_col is not None and shares_col < len(row) else ""
+        row_net_cash = row[net_cash_col] if net_cash_col is not None and net_cash_col < len(row) else ""
+        row_fcf1 = row[fcf1_col] if fcf1_col is not None and fcf1_col < len(row) else ""
+        row_g = str(row[g_col]).strip() if g_col is not None and g_col < len(row) else ""
+
+        if company_col is not None and not row_company and data.get("company_name"):
+            updates.append((row_idx, company_col + 1, data.get("company_name")))
+        if shares_col is not None and not row_shares and data.get("shares_bn") is not None:
+            updates.append((row_idx, shares_col + 1, data.get("shares_bn")))
+            source_rows.append(
+                [
+                    ticker,
+                    "Shares_bn",
+                    SEC_FACTS_URL.format(cik=data.get("cik", "")),
+                    "auto-seeded",
+                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ]
+            )
+        net_cash_updated = False
+        net_cash_missing = False
+        if net_cash_col is not None and _is_blank_or_zero(row_net_cash):
+            net_cash_bn = data.get("net_cash_bn")
+            if net_cash_bn is None:
+                try:
+                    net_cash_bn = get_net_cash_debt_bn(ticker, headers)
+                except Exception as exc:
+                    results.append({"status": "error", "ticker": ticker, "message": str(exc)})
+                    logger.exception("Net cash fetch failed for %s", ticker)
+                    continue
+            if net_cash_bn is not None:
+                updates.append((row_idx, net_cash_col + 1, net_cash_bn))
+                net_cash_updated = True
+                source_rows.append(
+                    [
+                        ticker,
+                        "Net cash/(debt) (bn)",
+                        SEC_FACTS_URL.format(cik=data.get("cik", "")),
+                        "auto-seeded",
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ]
+                )
+                log_rows.append(
+                    [
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ticker,
+                        "Net cash/(debt) (bn)",
+                        str(net_cash_bn),
+                        SEC_FACTS_URL.format(cik=data.get("cik", "")),
+                    ]
+                )
+            else:
+                net_cash_missing = True
+        fcf1_updated = False
+        fcf1_error = None
+        if fcf1_col is not None and _is_blank_or_zero(row_fcf1):
+            fcf_bn = data.get("fcf_bn")
+            if fcf_bn is not None:
+                g_rate = _parse_rate(row_g) if row_g else 0.03
+                fcf1_bn = fcf_bn * (1.0 + g_rate)
+                updates.append((row_idx, fcf1_col + 1, fcf1_bn))
+                fcf1_updated = True
+                source_rows.append(
+                    [
+                        ticker,
+                        "FCF1 (next-year, bn)",
+                        SEC_FACTS_URL.format(cik=data.get("cik", "")),
+                        "auto-seeded",
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ]
+                )
+            else:
+                fcf1_error = "FCF unavailable from SEC"
+
+        results.append(
+            {
+                "status": "ok",
+                "ticker": ticker,
+                "message": "updated",
+                "net_cash_updated": net_cash_updated,
+                "net_cash_missing": net_cash_missing,
+                "fcf1_updated": fcf1_updated,
+                "fcf1_error": fcf1_error,
+            }
+        )
 
     if updates:
         cell_list = [inputs_ws.cell(r, c) for r, c, _ in updates]
         for cell, (_, _, value) in zip(cell_list, updates):
             cell.value = value
         inputs_ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+    _append_sources_rows(sources_ws, source_rows)
+    _append_sources_log(inputs_ws.spreadsheet, log_rows)
     return results
+
+
+def _autofill_nz_fundamentals(inputs_ws, sources_ws, ss, sources_tab: str) -> dict:
+    inputs_values = inputs_ws.get_all_values()
+    if not inputs_values:
+        return {"results": [{"status": "error", "ticker": "", "message": "APP_INPUTS is empty."}], "debug": [], "warnings": []}
+    inputs_header = inputs_values[0]
+    ticker_col = _find_col_index(inputs_header, "Ticker")
+    market_col = _find_col_index(inputs_header, "Market")
+    shares_col = _find_col_index(inputs_header, "Shares_bn")
+    company_col = _find_col_index(inputs_header, "Company")
+    net_cash_col = _find_col_index(inputs_header, "Net cash/(debt) (bn)")
+    fcf1_col = _find_col_index(inputs_header, "FCF1 (next-year, bn)")
+    links_col = _find_col_index(inputs_header, "Links")
+    if ticker_col is None or market_col is None or shares_col is None or company_col is None:
+        return {
+            "results": [{"status": "error", "ticker": "", "message": "APP_INPUTS missing required columns."}],
+            "debug": [],
+            "warnings": [],
+        }
+
+    updates = []
+    source_rows = []
+    log_rows = []
+    results = []
+    debug_rows = []
+    warnings = []
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sources = load_sources(ss, sources_tab)
+    for row_idx, row in enumerate(inputs_values[1:], start=2):
+        if ticker_col >= len(row):
+            continue
+        ticker = str(row[ticker_col]).strip().upper()
+        if not ticker:
+            continue
+        market = str(row[market_col]).strip().upper() if market_col < len(row) else ""
+        if market != "NZ":
+            continue
+        ticker_norm = _normalize_nz_ticker(ticker)
+        shares_value = row[shares_col] if shares_col < len(row) else ""
+        company_value = row[company_col] if company_col < len(row) else ""
+        net_cash_value = row[net_cash_col] if net_cash_col is not None and net_cash_col < len(row) else ""
+        fcf1_value = row[fcf1_col] if fcf1_col is not None and fcf1_col < len(row) else ""
+        code = ticker.replace("NZX:", "").replace("NZ:", "")
+        company_text = str(company_value or "").strip()
+        company_missing = (
+            not company_text
+            or company_text.upper() == ticker.upper()
+            or company_text.upper() == code.upper()
+        )
+        source_entry = find_best_source(sources, ticker_norm, company_text or None)
+        source_url = source_entry.get("url") if source_entry else None
+        debug_rows.append(
+            {
+                "ticker_raw": ticker,
+                "ticker_norm": ticker_norm,
+                "source_key": source_entry.get("key") if source_entry else None,
+                "source_url": source_url,
+                "netcash_bn": source_entry.get("netcash_bn") if source_entry else None,
+                "fcf1_bn": source_entry.get("fcf1_bn") if source_entry else None,
+            }
+        )
+        if not _is_blank_or_zero(shares_value) and not company_missing and not _is_blank_or_zero(net_cash_value) and not _is_blank_or_zero(fcf1_value):
+            results.append({"status": "ok", "ticker": ticker, "message": "skipped"})
+            continue
+        try:
+            snapshot = get_nzx_snapshot(ticker)
+        except Exception as exc:
+            results.append({"status": "error", "ticker": ticker, "message": str(exc)})
+            continue
+        url = snapshot.get("source_url")
+        shares_bn = snapshot.get("shares_bn")
+        company_name = snapshot.get("company")
+        if shares_bn is not None and _is_blank_or_zero(shares_value):
+            updates.append((row_idx, shares_col + 1, shares_bn))
+            source_rows.append([ticker, "Shares_bn", url, "auto-seeded", timestamp])
+            log_rows.append([timestamp, ticker, "Shares_bn", str(shares_bn), url])
+        if company_name and company_missing:
+            updates.append((row_idx, company_col + 1, company_name))
+            source_rows.append([ticker, "Company", url, "auto-seeded", timestamp])
+            log_rows.append([timestamp, ticker, "Company", company_name, url])
+        if net_cash_col is not None and _is_blank_or_zero(net_cash_value):
+            netcash_bn = source_entry.get("netcash_bn") if source_entry else None
+            if netcash_bn is not None:
+                updates.append((row_idx, net_cash_col + 1, netcash_bn))
+            else:
+                warn = f"Missing NetCash_bn in Sources for {ticker_norm}"
+                warnings.append(warn)
+                print(warn)
+        if fcf1_col is not None and _is_blank_or_zero(fcf1_value):
+            fcf1_bn = source_entry.get("fcf1_bn") if source_entry else None
+            if fcf1_bn is not None:
+                updates.append((row_idx, fcf1_col + 1, fcf1_bn))
+            else:
+                warn = f"Missing FCF1_bn in Sources for {ticker_norm}"
+                warnings.append(warn)
+                print(warn)
+        link_to_write = source_url or url
+        if links_col is not None and link_to_write and (links_col >= len(row) or str(row[links_col]).strip() == ""):
+            updates.append((row_idx, links_col + 1, link_to_write))
+        if shares_bn is None and not company_name:
+            results.append({"status": "error", "ticker": ticker, "message": "Snapshot missing data"})
+            continue
+        if company_name is None:
+            results.append({"status": "ok", "ticker": ticker, "message": "missing company"})
+        else:
+            results.append({"status": "ok", "ticker": ticker, "message": "updated"})
+
+    if updates:
+        cell_list = [inputs_ws.cell(r, c) for r, c, _ in updates]
+        for cell, (_, _, value) in zip(cell_list, updates):
+            cell.value = value
+        inputs_ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+    _append_sources_rows(sources_ws, source_rows)
+    _append_sources_log(inputs_ws.spreadsheet, log_rows)
+    return {"results": results, "debug": debug_rows, "warnings": warnings}
 
 
 def _compute_dcf_block(row: pd.Series) -> pd.DataFrame:
     fcf1 = _safe_float(row.get("FCF1 (next-year, bn)"))
     g = _parse_rate(row.get("g (Y1-Y5)"))
     n_years = _parse_int(row.get("N (yrs)")) or 5
-    g_terminal = _parse_rate(row.get("g terminal"))
+    g_terminal = _parse_rate(row.get("g_terminal"))
     net_cash = _safe_float(row.get("Net cash/(debt) (bn)"))
-    shares = _safe_float(row.get("Shares (bn)"))
+    shares = _safe_float(row.get("Shares_bn"))
 
     n_years = max(1, n_years)
     display_years = list(range(1, 6))
@@ -1012,6 +1026,15 @@ def _ticker_key(value: str) -> str:
     return text
 
 
+def _normalize_nz_ticker(value: str) -> str:
+    text = _normalize_ticker(value)
+    if text.startswith("NZX:"):
+        return text.split("NZX:", 1)[1]
+    if text.startswith("NZ:"):
+        return text.split("NZ:", 1)[1]
+    return text
+
+
 def _refresh():
     st.session_state["template_refresh_token"] = st.session_state.get("template_refresh_token", 0) + 1
     st.rerun()
@@ -1056,17 +1079,20 @@ with st.sidebar:
                 try:
                     if not st.session_state.get("headers_ensured"):
                         _ensure_headers(tickers_ws, APP_TICKERS_HEADERS)
-                        _ensure_headers(inputs_ws, APP_INPUTS_HEADERS)
+                        ensure_app_inputs_schema(inputs_ws)
                         _ensure_headers(sources_ws, APP_SOURCES_HEADERS)
                         st.session_state["headers_ensured"] = True
-                    _seed_app_inputs_formulas(inputs_ws)
                     if _df_has_ticker(tickers_df, ticker):
                         _set_ticker_active(tickers_ws, ticker, True)
                     else:
                         _append_ticker_row(tickers_ws, ticker, market_value)
                     _dedupe_tickers_ws(tickers_ws)
                     if not _df_has_ticker(inputs_df, ticker):
-                        _append_inputs_row(inputs_ws, ticker, market_value)
+                        row_idx = _append_inputs_row(inputs_ws, ticker, market_value)
+                        seed_app_inputs_formulas(inputs_ws, {ticker.upper(): market_value})
+                        if row_idx:
+                            _set_inputs_market_value(inputs_ws, row_idx, market_value)
+                        _force_market_for_ticker(inputs_ws, ticker, market_value)
                     if not _df_has_ticker(sources_df, ticker):
                         _seed_sources(sources_ws, ticker, market_value)
                     _dedupe_inputs_ws(inputs_ws)
@@ -1085,7 +1111,7 @@ with st.sidebar:
             else:
                 if not st.session_state.get("headers_ensured"):
                     _ensure_headers(tickers_ws, APP_TICKERS_HEADERS)
-                    _ensure_headers(inputs_ws, APP_INPUTS_HEADERS)
+                    ensure_app_inputs_schema(inputs_ws)
                     _ensure_headers(sources_ws, APP_SOURCES_HEADERS)
                     st.session_state["headers_ensured"] = True
                 _set_ticker_active(tickers_ws, remove_ticker, False)
@@ -1096,26 +1122,91 @@ with st.sidebar:
                 _refresh()
     if st.button("Fix/Seed formulas"):
         try:
-            _ensure_headers(inputs_ws, APP_INPUTS_HEADERS)
-            _seed_app_inputs_formulas(inputs_ws)
-            st.success("APP_INPUTS formulas seeded in row 2.")
+            ensure_app_inputs_schema(inputs_ws)
+            seed_app_inputs_formulas(inputs_ws)
+            st.success("APP_INPUTS formulas seeded.")
         except Exception as exc:
             st.error(f"Formula seeding failed: {exc}")
     if st.button("Autofill US fundamentals"):
+        user_agent = get_sec_user_agent()
+        if not user_agent:
+            st.error(SEC_USER_AGENT_HELP)
+        else:
+            try:
+                cache = st.session_state.setdefault("us_fund_cache", {})
+                with st.status("Pulling US fundamentals...", expanded=True) as status:
+                    results = _autofill_us_fundamentals(tickers_ws, inputs_ws, sources_ws, cache, user_agent)
+                    fcf1_filled = []
+                    fcf1_failed = []
+                    net_cash_filled = []
+                    net_cash_missing = []
+                    errors = []
+                    for result in results:
+                        if result["status"] == "ok":
+                            st.write(f"{result['ticker']}: updated")
+                        else:
+                            st.write(f"{result['ticker']}: {result['message']}")
+                            errors.append(f"{result['ticker']}: {result['message']}")
+                        if result.get("fcf1_updated"):
+                            fcf1_filled.append(result["ticker"])
+                        elif result.get("fcf1_error"):
+                            fcf1_failed.append(f"{result['ticker']} ({result['fcf1_error']})")
+                        if result.get("net_cash_updated"):
+                            net_cash_filled.append(result["ticker"])
+                        elif result.get("net_cash_missing"):
+                            net_cash_missing.append(result["ticker"])
+                    if fcf1_filled:
+                        st.write("FCF1 filled for:", ", ".join(fcf1_filled))
+                    if fcf1_failed:
+                        st.write("FCF1 failed for:", ", ".join(fcf1_failed))
+                    if net_cash_filled:
+                        st.write("Net cash/(debt) filled for:", ", ".join(net_cash_filled))
+                    if net_cash_missing:
+                        st.warning("Missing net cash/(debt) for: " + ", ".join(net_cash_missing))
+                    for entry in errors:
+                        st.error(entry)
+                    status.update(label="US fundamentals refresh complete", state="complete")
+                _load_app_data.clear()
+                _refresh()
+            except Exception as exc:
+                st.error(f"US fundamentals failed: {exc}")
+    if st.button("Autofill NZ fundamentals"):
         try:
-            cache = st.session_state.setdefault("us_fund_cache", {})
-            with st.status("Pulling US fundamentals...", expanded=True) as status:
-                results = _autofill_us_fundamentals(tickers_ws, inputs_ws, cache)
+            sources_tab = str(st.secrets.get("return_ladder_template_sources_tab", "Sources")).strip()
+            with st.status("Pulling NZ fundamentals...", expanded=True) as status:
+                payload = _autofill_nz_fundamentals(inputs_ws, sources_ws, ss, sources_tab)
+                results = payload["results"]
+                debug_rows = payload["debug"]
+                warnings_list = payload["warnings"]
+                updated = []
+                missing = []
+                errors = []
                 for result in results:
                     if result["status"] == "ok":
-                        st.write(f"{result['ticker']}: updated")
+                        st.write(f"{result['ticker']}: {result['message']}")
+                        if result["message"] == "updated":
+                            updated.append(result["ticker"])
+                        elif result["message"] != "skipped":
+                            missing.append(result["ticker"])
                     else:
                         st.write(f"{result['ticker']}: {result['message']}")
-                status.update(label="US fundamentals refresh complete", state="complete")
+                        errors.append(f"{result['ticker']}: {result['message']}")
+                if updated:
+                    st.write("Updated:", ", ".join(updated))
+                if missing:
+                    st.warning("Missing NZ fundamentals for: " + ", ".join(missing))
+                for entry in errors:
+                    st.error(entry)
+                for warn in warnings_list:
+                    st.warning(warn)
+                if debug_rows:
+                    with st.expander("NZ Autofill Debug", expanded=False):
+                        st.dataframe(pd.DataFrame(debug_rows), use_container_width=True)
+                status.update(label="NZ fundamentals refresh complete", state="complete")
             _load_app_data.clear()
             _refresh()
         except Exception as exc:
-            st.error(f"US fundamentals failed: {exc}")
+            st.error(f"NZ fundamentals failed: {exc}")
 
 with st.expander("Template Debug", expanded=False):
     st.write("Sheet title:", data["sheet_title"])
