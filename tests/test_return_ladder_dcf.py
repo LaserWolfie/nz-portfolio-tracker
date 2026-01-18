@@ -39,10 +39,11 @@ def test_dcf_math_sanity():
         current_price=100.0,
         shares_out=10.0,
         net_cash=0.0,
-        fcf0=100.0,
+        fcf1=100.0,
         years=2,
         exit_multiple=10.0,
         growth_rate=0.0,
+        terminal_growth_rate=0.0,
     )
     result = build_dcf(inputs, [0.10])
     fv = result.fair_values[0.10]
@@ -56,10 +57,11 @@ def test_summary_zone():
         current_price=50.0,
         shares_out=10.0,
         net_cash=0.0,
-        fcf0=100.0,
+        fcf1=100.0,
         years=2,
         exit_multiple=10.0,
         growth_rate=0.0,
+        terminal_growth_rate=0.0,
     )
     result = build_dcf(inputs, [0.10])
     summary = build_summary_row(inputs, result, 0.10, zone_green=0.2, zone_red=-0.2)
@@ -76,6 +78,7 @@ def test_coerce_and_validate_years():
                     "years_to_exit": "5",
                     "exit_multiple": "20",
                     "growth_rate": "0.05",
+                    "fcf1": "100",
                     "fcf_year0": "100",
                     "shares_out": "0",
                 }

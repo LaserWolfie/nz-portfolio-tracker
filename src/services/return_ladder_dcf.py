@@ -12,10 +12,11 @@ class DCFInputs:
     current_price: float
     shares_out: float
     net_cash: float
-    fcf0: float
+    fcf1: float
     years: int
     exit_multiple: float
     growth_rate: float
+    terminal_growth_rate: float
 
 
 @dataclass(frozen=True)
@@ -32,9 +33,12 @@ def coerce_inputs_df(df: pd.DataFrame) -> pd.DataFrame:
     numeric_cols = [
         "shares_out",
         "fcf_year0",
+        "fcf1",
         "years_to_exit",
         "exit_multiple",
         "growth_rate",
+        "g_5y",
+        "g_terminal",
         "current_price",
         "net_cash_or_debt",
     ]
@@ -48,8 +52,14 @@ def coerce_inputs_df(df: pd.DataFrame) -> pd.DataFrame:
         df["exit_multiple"] = df["exit_multiple"].fillna(20.0)
     if "growth_rate" in df.columns:
         df["growth_rate"] = df["growth_rate"].fillna(0.0)
+    if "g_5y" in df.columns:
+        df["g_5y"] = df["g_5y"].fillna(0.0)
+    if "g_terminal" in df.columns:
+        df["g_terminal"] = df["g_terminal"].fillna(0.0)
     if "fcf_year0" in df.columns:
         df["fcf_year0"] = df["fcf_year0"].fillna(0.0)
+    if "fcf1" in df.columns:
+        df["fcf1"] = df["fcf1"].fillna(0.0)
     if "net_cash_or_debt" in df.columns:
         df["net_cash_or_debt"] = df["net_cash_or_debt"].fillna(0.0)
     if "current_price" in df.columns:
@@ -69,18 +79,23 @@ def validate_rows(rows: List[dict]) -> Tuple[List[str], List[str]]:
         missing = []
         years = row.get("years_to_exit")
         exit_multiple = row.get("exit_multiple")
-        growth_rate = row.get("growth_rate")
-        fcf0 = row.get("fcf_year0")
+        growth_rate = row.get("g_5y")
+        if growth_rate is None or (isinstance(growth_rate, float) and math.isnan(growth_rate)):
+            growth_rate = row.get("growth_rate")
+        fcf1 = row.get("fcf1")
+        fcf_year0 = row.get("fcf_year0")
         shares_out = row.get("shares_out")
 
         if years is None or years <= 0:
             missing.append("years_to_exit")
-        if exit_multiple is None or exit_multiple <= 0:
-            missing.append("exit_multiple")
+        # exit_multiple is optional when using perpetuity-growth terminal value
         if growth_rate is None or (isinstance(growth_rate, float) and math.isnan(growth_rate)):
             missing.append("growth_rate")
-        if fcf0 is None or (isinstance(fcf0, float) and math.isnan(fcf0)):
-            missing.append("fcf_year0")
+        if fcf1 is None or (isinstance(fcf1, float) and math.isnan(fcf1)):
+            if fcf_year0 is None or (isinstance(fcf_year0, float) and math.isnan(fcf_year0)):
+                missing.append("fcf1")
+            else:
+                warnings.append(f"{ticker}: fcf1 missing - trailing FCF will be used as FCF1")
 
         if missing:
             errors.append(f"{ticker}: missing/invalid {', '.join(missing)}")
@@ -96,7 +111,7 @@ def build_dcf(inputs: DCFInputs, required_returns: List[float]) -> DCFResult:
         raise ValueError("years must be at least 1")
 
     years = list(range(1, inputs.years + 1))
-    fcfs = [inputs.fcf0 * ((1.0 + inputs.growth_rate) ** year) for year in years]
+    fcfs = [inputs.fcf1 * ((1.0 + inputs.growth_rate) ** (year - 1)) for year in years]
 
     table = pd.DataFrame({"Year": years, "FCF": fcfs})
 
@@ -104,10 +119,11 @@ def build_dcf(inputs: DCFInputs, required_returns: List[float]) -> DCFResult:
     enterprise_values: Dict[float, float] = {}
     equity_values: Dict[float, float] = {}
 
-    terminal_fcf = fcfs[-1]
-    terminal_value = terminal_fcf * inputs.exit_multiple
-
     for required_return in required_returns:
+        terminal_fcf = fcfs[-1] * (1.0 + inputs.terminal_growth_rate)
+        if required_return <= inputs.terminal_growth_rate:
+            raise ValueError("required_return must be greater than g_terminal")
+        terminal_value = terminal_fcf / (required_return - inputs.terminal_growth_rate)
         pv_column = []
         for year, fcf in zip(years, fcfs):
             pv = fcf / ((1.0 + required_return) ** year)

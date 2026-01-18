@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+import json
 import re
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -8,6 +10,7 @@ import yfinance as yf
 
 
 _PRICE_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_NZX_JSON_VALUE_RE = r"\"{key}\"\\s*:\\s*\"?(?P<val>-?\\d+(?:\\.\\d+)?)\"?"
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,11 @@ class Quote:
     price: Optional[float]
     currency: Optional[str]
     source: str
+    url: Optional[str] = None
+    status_code: Optional[int] = None
+    error_snippet: Optional[str] = None
+    raw_price: Optional[str] = None
+    raw_shares: Optional[str] = None
     open_price: Optional[float] = None
     high_price: Optional[float] = None
     low_price: Optional[float] = None
@@ -75,6 +83,57 @@ def _extract_label_value(soup: BeautifulSoup, label: str) -> Optional[str]:
     return None
 
 
+def _deep_find_key_value(obj, target_key: str) -> Optional[str]:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k) == target_key and v not in (None, ""):
+                return str(v)
+            found = _deep_find_key_value(v, target_key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _deep_find_key_value(item, target_key)
+            if found is not None:
+                return found
+    return None
+
+
+def _regex_nzx_value(text: str, key: str) -> Optional[str]:
+    if not text:
+        return None
+    pattern = _NZX_JSON_VALUE_RE.format(key=re.escape(key))
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    return match.group("val")
+
+
+def _regex_nzx_last_price(text: str) -> Optional[str]:
+    for key in ("lastPrice", "lastTradePrice", "lastTradedPrice", "priceAmount", "closePrice"):
+        value = _regex_nzx_value(text, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _regex_nzx_shares_issued(text: str) -> Optional[str]:
+    if not text:
+        return None
+    table_match = re.search(
+        r"Securities\\s+Issued\\s*</th>\\s*<td>([^<]+)</td>",
+        text,
+        flags=re.I,
+    )
+    if table_match:
+        return table_match.group(1)
+    for key in ("securitiesIssued", "sharesIssued", "securities_issued", "shares_issued"):
+        value = _regex_nzx_value(text, key)
+        if value is not None:
+            return value
+    return None
+
+
 def parse_google_finance_html(html: str) -> Optional[float]:
     soup = BeautifulSoup(html, "html.parser")
 
@@ -93,11 +152,69 @@ def parse_google_finance_html(html: str) -> Optional[float]:
     return None
 
 
+def parse_nzx_next_data(html: str) -> dict[str, Optional[str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script or not script.string:
+        return {
+            "price": _regex_nzx_last_price(html),
+            "shares": _regex_nzx_shares_issued(html),
+        }
+    try:
+        data = json.loads(script.string)
+    except json.JSONDecodeError:
+        return {
+            "price": _regex_nzx_last_price(script.string),
+            "shares": _regex_nzx_shares_issued(script.string),
+        }
+
+    price_key_order = [
+        "lastPrice",
+        "lastTradePrice",
+        "lastTradedPrice",
+        "last_trade_price",
+        "priceAmount",
+        "closePrice",
+        "price",
+    ]
+    shares_key_order = [
+        "securitiesIssued",
+        "sharesIssued",
+        "securities_issued",
+        "shares_issued",
+    ]
+
+    price_val = None
+    for key in price_key_order:
+        price_val = _deep_find_key_value(data, key)
+        if price_val is not None:
+            break
+    if price_val is None:
+        price_val = _regex_nzx_last_price(script.string)
+
+    shares_val = None
+    for key in shares_key_order:
+        shares_val = _deep_find_key_value(data, key)
+        if shares_val is not None:
+            break
+    if shares_val is None:
+        shares_val = _regex_nzx_shares_issued(script.string)
+
+    return {
+        "price": str(price_val) if price_val is not None else None,
+        "shares": str(shares_val) if shares_val is not None else None,
+    }
+
+
 def parse_nzx_instrument_html(html: str) -> dict[str, Optional[float]]:
     soup = BeautifulSoup(html, "html.parser")
 
-    price = parse_nzx_html(html)
-    securities_issued = _parse_int(_extract_label_value(soup, "Securities Issued"))
+    next_data = parse_nzx_next_data(html)
+    price_raw = next_data.get("price")
+    shares_raw = next_data.get("shares")
+    price = _parse_float(price_raw) if price_raw else parse_nzx_html(html)
+    securities_text = _extract_label_value(soup, "Securities Issued")
+    securities_issued = _parse_int(securities_text) if securities_text else _parse_int(shares_raw)
     open_price = _parse_float(_extract_label_value(soup, "Open"))
     high_price = _parse_float(_extract_label_value(soup, "High"))
     low_price = _parse_float(_extract_label_value(soup, "Low"))
@@ -112,6 +229,8 @@ def parse_nzx_instrument_html(html: str) -> dict[str, Optional[float]]:
 
     return {
         "price": price,
+        "raw_price": price_raw,
+        "raw_shares": shares_raw,
         "shares_outstanding": float(securities_issued) if securities_issued is not None else None,
         "open_price": open_price,
         "high_price": high_price,
@@ -227,16 +346,34 @@ def fetch_nz_quote_nzx(ticker: str) -> Quote:
     symbol = ticker.strip().upper()
     url = f"https://www.nzx.com/instruments/{symbol}"
     headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()
+    resp = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            last_exc = exc
+            time.sleep(0.5 * (attempt + 1))
+    if resp is None:
+        raise last_exc or RuntimeError("NZX request failed")
 
     data = parse_nzx_instrument_html(resp.text)
+    snippet = None
+    if data.get("price") is None:
+        snippet = resp.text[:200]
     return Quote(
         ticker=symbol,
         market="NZ",
         price=data.get("price"),
         currency="NZD",
         source="nzx",
+        url=url,
+        status_code=resp.status_code,
+        error_snippet=snippet,
+        raw_price=data.get("raw_price"),
+        raw_shares=data.get("raw_shares"),
         open_price=data.get("open_price"),
         high_price=data.get("high_price"),
         low_price=data.get("low_price"),

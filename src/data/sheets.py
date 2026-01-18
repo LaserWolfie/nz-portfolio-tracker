@@ -48,10 +48,14 @@ def _coerce_numeric_columns(df):
 
 @st.cache_data(ttl=600)
 def load_stock_df() -> pd.DataFrame:
-    client = get_gspread_client()
-    ws = client.open_by_key(STOCKS_SHEET_ID).worksheet(STOCKS_TAB)
-    values = ws.get_all_values()
-    if not values:
+    try:
+        client = get_gspread_client()
+        ws = client.open_by_key(STOCKS_SHEET_ID).worksheet(STOCKS_TAB)
+        values = ws.get_all_values()
+        if not values:
+            return pd.DataFrame()
+    except Exception as exc:
+        st.error(f"Stock sheet sync failed: {exc}")
         return pd.DataFrame()
 
     # Find first non-empty row as header
@@ -140,13 +144,19 @@ def load_stock_df() -> pd.DataFrame:
 
 @st.cache_data(ttl=600)
 def load_property_df():
-    client = get_gspread_client()
-    sheet = client.open_by_key(PROPERTY_SHEET_ID)
-    values = sheet.worksheet(PROPERTY_TAB).get_all_values()
-    headers = [str(h).strip() for h in values[0]]
-    df = pd.DataFrame(values[1:], columns=headers)
-    df.columns = [c.replace(" ", "_") for c in df.columns]
-    return _coerce_numeric_columns(df)
+    try:
+        client = get_gspread_client()
+        sheet = client.open_by_key(PROPERTY_SHEET_ID)
+        values = sheet.worksheet(PROPERTY_TAB).get_all_values()
+        if not values:
+            return pd.DataFrame()
+        headers = [str(h).strip() for h in values[0]]
+        df = pd.DataFrame(values[1:], columns=headers)
+        df.columns = [c.replace(" ", "_") for c in df.columns]
+        return _coerce_numeric_columns(df)
+    except Exception as exc:
+        st.error(f"Property sheet sync failed: {exc}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=900)
