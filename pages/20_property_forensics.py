@@ -1,4 +1,5 @@
-from src.data.sheets import ensure_data_loaded
+from src.data.sheets import ensure_data_loaded, get_gspread_client, load_property_df
+from src.config import PROPERTY_SHEET_ID, PROPERTY_TAB
 ensure_data_loaded()
 
 import streamlit as st
@@ -8,7 +9,7 @@ import altair as alt
 from datetime import datetime
 import google.generativeai as genai
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from gspread.utils import rowcol_to_a1
 import json
 from modules import utils
 
@@ -31,79 +32,74 @@ def clean_percent(x):
     return utils.clean_percent(x)
 
 def save_to_google_sheet(data_dict):
-    """Writes the extracted data to the Google Sheet with EXACT column mapping."""
+    """Upserts extracted data to the Google Sheet (match by Entity_Name)."""
     try:
-        # Load Google Sheets Credentials
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
-        if "gcp_service_account" in st.secrets:
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+        client = get_gspread_client()
+        sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
+
+        values = sheet.get_all_values()
+        if not values:
+            st.error("Save Error: Property sheet has no headers.")
+            return False
+
+        headers = values[0]
+        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
+        if "entity_name" not in header_norm:
+            st.error("Save Error: Entity_Name column not found.")
+            return False
+
+        defaults = {
+            "Entity_Name": "",
+            "Owner_Entity": "Other",
+            "Manager": "Unknown",
+            "Original_Value": 0,
+            "Current_Value": 0,
+            "Original_Distribution": 0,
+            "Annual_Distribution": 0,
+            "LVR_Percent": 0,
+            "WALT_Years": 0,
+            "Vacancy_Percent": 0,
+            "Distribution_At_Risk": "No",
+            "Capital_Raise": 0,
+            "Capex_Planned": 0,
+            "Expense_Ratio": 0,
+            "Debt_Yield": 0,
+            "CapEx_Reserves": 0,
+            "Loan_Expiry_Year": "",
+            "Sector": "Other",
+            "Interest_Cover": 0,
+        }
+        data_norm = {str(k).strip().lower().replace(" ", "_"): v for k, v in data_dict.items()}
+
+        row = []
+        defaults_norm = {k.lower(): v for k, v in defaults.items()}
+        for header in header_norm:
+            if header in data_norm:
+                row.append(data_norm[header])
+            elif header in defaults_norm:
+                row.append(defaults_norm[header])
+            else:
+                row.append("")
+
+        entity_value = str(data_norm.get("entity_name", "")).strip()
+        if not entity_value:
+            st.error("Save Error: Entity_Name is required for upsert.")
+            return False
+
+        target_row = None
+        entity_col_idx = header_norm.index("entity_name")
+        for idx, row_vals in enumerate(values[1:], start=2):
+            existing = str(row_vals[entity_col_idx]).strip()
+            if existing.lower() == entity_value.lower():
+                target_row = idx
+                break
+
+        if target_row:
+            start = rowcol_to_a1(target_row, 1)
+            end = rowcol_to_a1(target_row, len(headers))
+            sheet.update(f"{start}:{end}", [row])
         else:
-            creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-        
-        client = gspread.authorize(creds)
-        
-        # --- THE FIX: Correct File and Tab Name ---
-        # We use "Proportional Property" (File) and "Syndicate_Data" (Tab)
-        sheet = client.open("Proportional Property").worksheet("Syndicate_Data")
-        
-# --- DYNAMIC ROW MAPPING (Fixed to prevent $0 values) ---
-        row = [
-            data_dict.get('Entity_Name', ''),           # A
-            data_dict.get('Owner_Entity', 'Other'),     # B
-            data_dict.get('Manager', 'Unknown'),        # C
-            data_dict.get('Original_Value', 0),         # D: Fixed (Retrieves from AI)
-            data_dict.get('Current_Value', 0),          # E
-            data_dict.get('Original_Distribution', 0),  # F: Fixed (Retrieves from AI)
-            data_dict.get('Annual_Distribution', 0),    # G
-            data_dict.get('LVR_Percent', 0),            # H
-            data_dict.get('WALT_Years', 0),             # I
-            data_dict.get('Vacancy_Percent', 0),        # J
-            "",                                         # K
-            "",                                         # L
-            "",                                         # M
-            data_dict.get('Distribution_At_Risk', 'No'),# N
-            data_dict.get('Capital_Raise', 0),          # O
-            data_dict.get('Capex_Planned', 0),          # P
-            data_dict.get('Expense_Ratio', 0),          # Q
-            data_dict.get('Debt_Yield', 0),             # R
-            data_dict.get('CapEx_Reserves', 0),         # S
-            data_dict.get('Loan_Expiry_Year', ''),      # T
-            data_dict.get('Sector', 'Other'),           # U
-            data_dict.get('Interest_Cover', 0)          # V
-        ]
-        
-        # --- SAFETY SAVE ---
-        try:
             sheet.append_row(row)
-            return True
-        except Exception as e:
-            # If Google sends a "200 OK" but the old library thinks it's an error
-            if "200" in str(e):
-                return True
-            else:
-                raise e
-
-    except Exception as e:
-        st.error(f"Save Error: {e}")
-        return False
-        
-        # --- SAFETY SAVE ---
-        try:
-            sheet.append_row(row)
-            return True
-        except Exception as e:
-            # If Google sends a "200 OK" but the old library thinks it's an error
-            if "200" in str(e):
-                return True
-            else:
-                raise e
-
-    except Exception as e:
-        st.error(f"Save Error: {e}")
-        return False
-        
-        sheet.append_row(row)
         return True
     except Exception as e:
         st.error(f"Save Error: {e}")
@@ -312,6 +308,12 @@ with tab_upload:
                     response = model.generate_content([{'mime_type': 'application/pdf', 'data': pdf_data}, prompt])
                     cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
                     st.session_state['scanned_data'] = json.loads(cleaned_text)
+                    if save_to_google_sheet(st.session_state['scanned_data']):
+                        load_property_df.clear()
+                        st.session_state.prop_df = load_property_df()
+                        st.session_state["prop_df_refreshed_at"] = datetime.utcnow().isoformat()
+                        st.success("Saved to Google Sheets and refreshed property data.")
+                        st.rerun()
                     st.success("✅ Extraction Complete!")
                 except Exception as e:
                     st.error(f"AI Error: {e}")
