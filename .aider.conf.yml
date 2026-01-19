@@ -1,0 +1,56 @@
+##########################################################
+# NZ Wealth Manager Pro  Aider config
+# Place at repo root.
+# Docs: aider supports most CLI flags as YAML keys (hyphenated).
+##########################################################
+
+# Main model (set to your preferred provider/model)
+# Examples:
+# model: openai/gpt-4.1
+# model: anthropic/claude-3.5-sonnet
+model: openai/gpt-4.1
+
+# Editing style
+edit-format: diff
+
+# Git workflow: keep commits manual (fits small safe increments)
+git: true
+auto-commits: false
+dirty-commits: false
+show-diffs: true
+
+# Quality-of-life
+pretty: true
+stream: true
+suggest-shell-commands: true
+
+# Load env vars (API keys etc) from here (gitignored recommended)
+env-file: .aider.env
+
+# Keep context anchored to your operating rules
+read:
+  - AGENTS.md
+  - .github/skills/00_project_overview.md
+  - .github/skills/01_dev_workflow.md
+  - .github/skills/02_streamlit_patterns.md
+  - .github/skills/03_google_sheets.md
+  - .github/skills/04_return_ladder.md
+  - .github/skills/05_testing_and_safeties.md
+
+# Fast lint that catches SyntaxError instantly (no extra deps).
+# Aider expects strings like: "python: <command>"
+lint-cmd:
+  - "python: python -m compileall -q ."
+auto-lint: true
+
+# Tests (optional). Keep auto-test off; run when you ask for it.
+test-cmd:
+  - "python -m compileall -q ."
+auto-test: false
+
+# Repomap sizing (adjust if you want more/less context scanning)
+map-tokens: 2048
+map-refresh: auto
+
+# Privacy/telemetry preference (optional)
+analytics: false
