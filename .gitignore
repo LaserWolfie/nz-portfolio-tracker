@@ -1,10 +1,17 @@
-venv/
+venv*/
+.venv*/
+.venv312/
 credentials.json
 .streamlit/secrets.toml
+.streamlit/cache/
+.streamlit/static/
 __pycache__/
+**/__pycache__/
+*.pyc
 # Streamlit local logs (never commit)
 streamlit.err.log
 streamlit.out.log
 *.streamlit*.log
 *.err.log
 *.out.log
+.aider*

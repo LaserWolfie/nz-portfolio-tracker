@@ -39,13 +39,11 @@ read:
 
 # Fast lint that catches SyntaxError instantly (no extra deps).
 # Aider expects strings like: "python: <command>"
-lint-cmd:
-  - "python: python -m compileall -q ."
+lint-cmd: "python -m compileall -q ."
 auto-lint: true
 
 # Tests (optional). Keep auto-test off; run when you ask for it.
-test-cmd:
-  - "python -m compileall -q ."
+test-cmd: "python -m compileall -q ."
 auto-test: false
 
 # Repomap sizing (adjust if you want more/less context scanning)
