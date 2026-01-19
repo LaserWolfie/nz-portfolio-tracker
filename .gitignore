@@ -8,6 +8,7 @@ credentials.json
 __pycache__/
 **/__pycache__/
 *.pyc
+nz_sources_inspect.txt
 # Streamlit local logs (never commit)
 streamlit.err.log
 streamlit.out.log
