@@ -7,15 +7,29 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import re
+import difflib
 import google.generativeai as genai
 import gspread
 from gspread.utils import rowcol_to_a1
 import json
 from modules import utils
+from modules.utils import normalize_entity_name
 
 ENABLE_AI_UPSERT = False
+
+WHITELIST = [
+    "LVR_Percent",
+    "WALT_Years",
+    "Vacancy_Percent",
+    "Expense_Ratio",
+    "Debt_Yield",
+    "Loan_Expiry_Year",
+    "Interest_Cover",
+    "Payout_Ratio",
+]
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="NZ Wealth Manager Pro — Property Forensics", page_icon="🏢", layout="wide")
@@ -47,6 +61,36 @@ def clean_number(value, default=0.0, nan_on_invalid=False):
 
 def clean_percent(x):
     return utils.clean_percent(x)
+
+def normalize_value(field, value):
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s == "":
+        return None
+    s_lower = s.lower()
+    if s_lower in {"-", "none", "null", "nan", "n/a", "na"}:
+        return None
+    if field == "Vacancy_Percent" and s_lower == "nil":
+        return 0.0
+    if field == "Interest_Cover":
+        s = s.replace("x", "").replace("X", "").strip()
+    if field == "Loan_Expiry_Year":
+        try:
+            return int(float(s.replace(",", "")))
+        except Exception:
+            return None
+    has_percent = "%" in s
+    s_num = s.replace("$", "").replace(",", "").replace("%", "").replace("NZD", "").strip()
+    try:
+        num = float(s_num)
+    except Exception:
+        return None
+    if field in {"LVR_Percent", "Vacancy_Percent", "Expense_Ratio", "Debt_Yield", "Payout_Ratio"}:
+        if has_percent or (num > 1.0 and num <= 100.0) or num > 3.0:
+            return num / 100.0
+        return num
+    return num
 
 def normalize_whitelist_value(field, value):
     if value is None:
@@ -80,6 +124,10 @@ def normalize_whitelist_value(field, value):
         num = float(s_num)
     except Exception:
         return None
+    if field == "payout_ratio":
+        if has_percent or num > 3.0:
+            return num / 100.0
+        return num
     if field in percent_fields:
         if has_percent or num > 1.0:
             if num > 100.0:
@@ -103,6 +151,7 @@ def update_sheet_whitelist_fields(data_dict):
         "Debt_Yield",
         "Loan_Expiry_Year",
         "Interest_Cover",
+        "Payout_Ratio",
     }
 
     try:
@@ -120,12 +169,30 @@ def update_sheet_whitelist_fields(data_dict):
             return False
 
         entity_col = header_norm.index("entity_name")
+        existing_names = [str(row_vals[entity_col]) if len(row_vals) > entity_col else "" for row_vals in values[1:]]
+        existing_norm = [normalize_entity_name(name) for name in existing_names]
+        extracted_norm = normalize_entity_name(entity_name)
+        match_indices = [i for i, name in enumerate(existing_norm) if name == extracted_norm]
         target_row = None
-        for idx, row_vals in enumerate(values[1:], start=2):
-            existing = str(row_vals[entity_col]).strip()
-            if existing.lower() == entity_name.lower():
-                target_row = idx
-                break
+        if len(match_indices) == 1:
+            target_row = match_indices[0] + 2
+        elif len(match_indices) > 1:
+            st.warning("Multiple Entity_Name matches found; using the first match.")
+            target_row = match_indices[0] + 2
+        else:
+            close_norms = difflib.get_close_matches(extracted_norm, existing_norm, n=3)
+            close_display = []
+            for cn in close_norms:
+                idx = existing_norm.index(cn)
+                raw = existing_names[idx]
+                close_display.append(f"{raw} ({repr(raw)})")
+            st.warning(
+                "Entity_Name not found in sheet. "
+                f"Extracted={entity_name} ({repr(entity_name)}) "
+                f"Norm={repr(extracted_norm)} "
+                f"Closest={close_display}"
+            )
+            return False
 
         if not target_row:
             st.error("Entity_Name not found in sheet. No changes made.")
@@ -144,6 +211,13 @@ def update_sheet_whitelist_fields(data_dict):
             col_idx = header_norm.index(norm_key)
             sheet.update_cell(target_row, col_idx + 1, norm_val)
             updated += 1
+
+        if "last_updated" in header_norm:
+            updated_date = datetime.now(ZoneInfo("Pacific/Auckland")).date().isoformat()
+            col_idx = header_norm.index("last_updated")
+            sheet.update_cell(target_row, col_idx + 1, updated_date)
+        else:
+            st.warning("Last_Updated column not found; skipping timestamp update.")
 
         if updated:
             st.cache_data.clear()
@@ -255,6 +329,13 @@ def save_to_google_sheet(data_dict):
 # --- DATA LOADING ---
 df = st.session_state.prop_df.copy()
 df.columns = [c.replace(' ', '_') for c in df.columns]
+if "Payout_Ratio" not in df.columns:
+    df["Payout_Ratio"] = pd.NA
+
+# Debug: show columns and whether Payout_Ratio exists
+with st.expander("Debug"):
+    st.write(list(df.columns))
+    st.write(f"Payout_Ratio present: {'Payout_Ratio' in df.columns}")
 
 # Remove Totals
 df = df[~df['Entity_Name'].astype(str).str.lower().str.contains('total', na=False)]
@@ -438,8 +519,27 @@ if view == "Portfolio Dashboard":
 
     # --- 3. DETAILED TABLE ---
     st.subheader(f"🔎 Syndicate Details ({scenario_label})")
-    display_cols = ['Entity_Name', 'Owner_Entity', 'Original_Value', 'Annual_Distribution', 'Scenario_Distribution', 'Scenario_Yield', 'LVR_Percent']
-    st.dataframe(df[display_cols].style.format({"Original_Value": "${:,.0f}", "Annual_Distribution": "${:,.0f}", "Scenario_Distribution": "${:,.0f}"}), use_container_width=True)
+    display_cols = [
+        'Entity_Name',
+        'Owner_Entity',
+        'Original_Value',
+        'Annual_Distribution',
+        'Scenario_Distribution',
+        'Scenario_Yield',
+        'LVR_Percent',
+        'Payout_Ratio',
+    ]
+    st.dataframe(
+        df[display_cols].style.format(
+            {
+                "Original_Value": "${:,.0f}",
+                "Annual_Distribution": "${:,.0f}",
+                "Scenario_Distribution": "${:,.0f}",
+                "Payout_Ratio": "{:.1%}",
+            }
+        ),
+        use_container_width=True,
+    )
 # ==========================================
 # TAB 2: AI REPORT SCANNER
 # ==========================================
@@ -486,16 +586,24 @@ else:
                         "\"Expense_Ratio\": number | null (decimal fraction), "
                         "\"Debt_Yield\": number | null (decimal fraction), "
                         "\"Loan_Expiry_Year\": integer | null, "
-                        "\"Interest_Cover\": number | null (numeric ratio, no \"x\")"
+                        "\"Interest_Cover\": number | null (numeric ratio, no \"x\"), "
+                        "\"Payout_Ratio\": number | null (decimal ratio, e.g. 1.05 for 105%)"
                         "}. "
                         "Prefer computing Interest_Cover from the income statement "
                         "(operating profit before finance / interest expense). "
-                        "If you cannot compute confidently, return null."
+                        "If you cannot compute confidently, return null. "
+                        "For Payout_Ratio, look for labels like \"Payout ratio\" in investment returns "
+                        "or sidebar metric panels. If unknown, return null."
                     )
                     response = model.generate_content([{'mime_type': 'application/pdf', 'data': pdf_data}, prompt])
                     cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
                     scanned_data = json.loads(cleaned_text)
                     if isinstance(scanned_data, dict):
+                        if "Payout_Ratio" in scanned_data:
+                            scanned_data["Payout_Ratio"] = normalize_value(
+                                "Payout_Ratio",
+                                scanned_data.get("Payout_Ratio"),
+                            )
                         scanned_data = post_process_distributions(scanned_data)
                     if isinstance(scanned_data, dict):
                         entity_name = str(scanned_data.get("Entity_Name", "")).strip()
@@ -518,62 +626,74 @@ else:
         with st.expander("Review extracted data (before updating Google Sheet)"):
             st.json(st.session_state["scanned_data"])
             edit_df = pd.DataFrame([st.session_state["scanned_data"]])
-            edited_df = st.data_editor(edit_df, num_rows="fixed", use_container_width=True)
+            edited_df = st.data_editor(
+                edit_df,
+                num_rows="fixed",
+                use_container_width=True,
+                key="scanned_editor",
+            )
             entity_name = str(edited_df.iloc[0].get("Entity_Name", "")).strip()
             if entity_name:
-                try:
-                    client = get_gspread_client()
-                    sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
-                    values = sheet.get_all_values()
-                    if values:
-                        headers = values[0]
-                        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
-                        if "entity_name" in header_norm:
-                            entity_col = header_norm.index("entity_name")
-                            target_row = None
-                            for idx, row_vals in enumerate(values[1:], start=2):
-                                existing = str(row_vals[entity_col]).strip()
-                                if existing.lower() == entity_name.lower():
-                                    target_row = idx
-                                    break
-                            if target_row:
-                                row_vals = values[target_row - 1]
-                                preview_rows = []
-                                fields = [
-                                    "LVR_Percent",
-                                    "WALT_Years",
-                                    "Vacancy_Percent",
-                                    "Expense_Ratio",
-                                    "Debt_Yield",
-                                    "Loan_Expiry_Year",
-                                    "Interest_Cover",
-                                ]
-                                for field in fields:
-                                    norm_key = field.lower()
-                                    if norm_key not in header_norm:
-                                        continue
-                                    col_idx = header_norm.index(norm_key)
-                                    current_raw = row_vals[col_idx] if col_idx < len(row_vals) else ""
-                                    new_raw = edited_df.iloc[0].get(field)
-                                    current_norm = normalize_whitelist_value(norm_key, current_raw)
-                                    new_norm = normalize_whitelist_value(norm_key, new_raw)
-                                    will_update = new_norm is not None and (
-                                        current_norm is None or abs(float(new_norm) - float(current_norm)) > 1e-9
-                                    )
-                                    preview_rows.append(
-                                        {
-                                            "Field": field,
-                                            "Current": current_norm if current_norm is not None else current_raw,
-                                            "New": new_norm if new_norm is not None else new_raw,
-                                            "Will Update?": bool(will_update),
-                                        }
-                                    )
-                                if preview_rows:
-                                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+                prop_df = st.session_state.get("prop_df")
+                if prop_df is None or prop_df.empty:
+                    prop_df = load_property_df()
+                if "Entity_Name" in prop_df.columns:
+                    existing_names = prop_df["Entity_Name"].astype(str).tolist()
+                    existing_norm = [normalize_entity_name(name) for name in existing_names]
+                    extracted_norm = normalize_entity_name(entity_name)
+                    match_indices = [i for i, name in enumerate(existing_norm) if name == extracted_norm]
+                    if len(match_indices) >= 1:
+                        if len(match_indices) > 1:
+                            st.warning("Multiple Entity_Name matches found; using the first match.")
+                        current_row = prop_df.iloc[match_indices[0]].to_dict()
+                        current_map = {field: current_row.get(field) for field in WHITELIST}
+                        new_map = {field: edited_df.iloc[0].get(field) for field in WHITELIST}
+                        preview_rows = []
+                        for field in WHITELIST:
+                            current_norm = normalize_value(field, current_map.get(field))
+                            new_norm = normalize_value(field, new_map.get(field))
+                            if field == "Loan_Expiry_Year":
+                                will_update = new_norm is not None and (
+                                    current_norm is None or int(new_norm) != int(current_norm)
+                                )
                             else:
-                                st.info("Entity_Name not found in sheet. Preview unavailable.")
-                except Exception:
-                    st.info("Preview unavailable (sheet lookup failed).")
-            reviewed_ok = st.checkbox("I have reviewed the data and it looks OK", value=False)
-            if st.button("Update Google Sheet", disabled=not reviewed_ok):
-                update_sheet_whitelist_fields(edited_df.iloc[0].to_dict())
+                                will_update = new_norm is not None and (
+                                    current_norm is None or abs(float(new_norm) - float(current_norm)) > 1e-6
+                                )
+                            preview_rows.append(
+                                {
+                                    "Field": field,
+                                    "Current": current_map.get(field),
+                                    "New": new_map.get(field),
+                                    "Will Update?": bool(will_update),
+                                }
+                            )
+                        st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+                    else:
+                        close_norms = difflib.get_close_matches(extracted_norm, list(set(existing_norm)), n=3)
+                        close_display = []
+                        for cn in close_norms:
+                            idx = existing_norm.index(cn)
+                            raw = existing_names[idx]
+                            close_display.append(f"{raw} ({repr(raw)})")
+                        st.warning(
+                            "Entity_Name not found in sheet. "
+                            f"Extracted={entity_name} ({repr(entity_name)}) "
+                            f"Norm={repr(extracted_norm)} "
+                            f"Closest={close_display}"
+                        )
+                else:
+                    st.warning("Entity_Name column missing in sheet; preview unavailable.")
+            with st.form("sheet_update_form", clear_on_submit=False):
+                reviewed_ok = st.checkbox(
+                    "I have reviewed the data and it looks OK",
+                    value=False,
+                    key="reviewed_ok",
+                )
+                submitted = st.form_submit_button("Update Google Sheet")
+            if submitted:
+                reviewed_ok = st.session_state.get("reviewed_ok", False)
+                if not reviewed_ok:
+                    st.warning("Tick the review box before updating.")
+                else:
+                    update_sheet_whitelist_fields(edited_df.iloc[0].to_dict())
