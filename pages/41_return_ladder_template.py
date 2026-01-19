@@ -14,6 +14,7 @@ from src.services.return_ladder_app_inputs import (
     ensure_app_inputs_schema,
     seed_app_inputs_formulas,
 )
+from src.services.nz_sources_lookup import load_sources_wide
 from src.services.sec_fundamentals import (
     SEC_USER_AGENT_HELP,
     SEC_FACTS_URL,
@@ -29,6 +30,26 @@ from src.services.sources_registry import find_best_source, load_sources
 st.set_page_config(page_title="Return Ladder (Template Viewer)", page_icon="\U0001F4C4", layout="wide")
 
 st.title("Return Ladder (Template Viewer)")
+with st.expander("About this page (Toy Model)", expanded=False):
+    st.markdown(
+        "📉 Return Ladder (Template Viewer)  Toy Model (Quick Valuation)\n"
+        "This page is a toy valuation model designed for fast screening and sensitivity analysis. "
+        "It helps you sanity-check a stock by showing how the implied fair value per share changes as your "
+        "required return (discount rate) changes.\n\n"
+        "Important: This is intentionally simplified and directional  it is not a full, audit-grade DCF. "
+        "Keep units consistent: Shares_bn, Net cash/(debt) (bn), and FCF1 (bn) must all be in billions and "
+        "in the same currency. If the company has net debt, enter it as a negative number.\n\n"
+        "Roadmap: A full DCF model will be added in a later release (more complete cash-flow build including "
+        "operating drivers, taxes, capex, working capital, and dilution)."
+    )
+with st.expander("Toy model checklist (whats left)", expanded=False):
+    st.markdown(
+        "- [ ] Fix SAN: keep APP_SOURCES Field=\"Company\" pointing to NZX instrument URL; store annual report under Field=\"Annual report (PDF)\"\n"
+        "- [ ] NZ NetCash/FCF1: Gemini extracts values  write into Sources tab columns NetCash_bn and FCF1_bn\n"
+        "- [ ] NZ Autofill button should read Sources  fill APP_INPUTS Net cash/(debt) (bn) and FCF1 only if blank/seeded-zero, and append URL into Links\n"
+        "- [ ] Alias matching (EBO  EBOS)\n"
+        "- [ ] No cell notes; Links/SOURCES_LOG only"
+    )
 st.caption("Template viewer with app-side DCF calculations and write-back to app tabs.")
 
 logger = logging.getLogger(__name__)
@@ -230,6 +251,18 @@ def _is_blank_or_zero(value) -> bool:
         return True
     parsed = _parse_float(text)
     return parsed is None or parsed == 0.0
+
+
+def _is_blank_or_zero_strict(value) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    parsed = _parse_float(text)
+    if parsed is None:
+        return False
+    return parsed == 0.0
 
 
 def _find_col_index(headers: list[str], target: str) -> int | None:
@@ -1172,36 +1205,99 @@ with st.sidebar:
                 st.error(f"US fundamentals failed: {exc}")
     if st.button("Autofill NZ fundamentals"):
         try:
-            sources_tab = str(st.secrets.get("return_ladder_template_sources_tab", "Sources")).strip()
             with st.status("Pulling NZ fundamentals...", expanded=True) as status:
-                payload = _autofill_nz_fundamentals(inputs_ws, sources_ws, ss, sources_tab)
-                results = payload["results"]
-                debug_rows = payload["debug"]
-                warnings_list = payload["warnings"]
-                updated = []
-                missing = []
-                errors = []
-                for result in results:
-                    if result["status"] == "ok":
-                        st.write(f"{result['ticker']}: {result['message']}")
-                        if result["message"] == "updated":
-                            updated.append(result["ticker"])
-                        elif result["message"] != "skipped":
-                            missing.append(result["ticker"])
-                    else:
-                        st.write(f"{result['ticker']}: {result['message']}")
-                        errors.append(f"{result['ticker']}: {result['message']}")
-                if updated:
-                    st.write("Updated:", ", ".join(updated))
-                if missing:
-                    st.warning("Missing NZ fundamentals for: " + ", ".join(missing))
-                for entry in errors:
-                    st.error(entry)
-                for warn in warnings_list:
-                    st.warning(warn)
-                if debug_rows:
-                    with st.expander("NZ Autofill Debug", expanded=False):
-                        st.dataframe(pd.DataFrame(debug_rows), use_container_width=True)
+                sources_map = load_sources_wide(sheet_id)
+                inputs_values = inputs_ws.get_all_values()
+                if not inputs_values:
+                    st.error("APP_INPUTS is empty.")
+                    status.update(label="NZ fundamentals refresh complete", state="complete")
+                    st.stop()
+
+                header = inputs_values[0]
+                ticker_col = _find_col_index(header, "Ticker")
+                market_col = _find_col_index(header, "Market")
+                net_cash_col = _find_col_index(header, "Net cash/(debt) (bn)")
+                fcf1_col = _find_col_index(header, "FCF1 (next-year, bn)")
+                links_col = _find_col_index(header, "Links")
+                notes_col = _find_col_index(header, "Notes")
+
+                if None in (ticker_col, market_col, net_cash_col, fcf1_col, links_col, notes_col):
+                    st.error("APP_INPUTS missing required columns.")
+                    status.update(label="NZ fundamentals refresh complete", state="complete")
+                    st.stop()
+
+                updates = []
+                updated_tickers = set()
+                missing_sources = set()
+                fields_updated = {"net_cash": 0, "fcf1": 0, "links": 0}
+
+                for row_idx, row in enumerate(inputs_values[1:], start=2):
+                    ticker = str(row[ticker_col]).strip() if ticker_col < len(row) else ""
+                    if not ticker:
+                        continue
+                    market = str(row[market_col]).strip().upper() if market_col < len(row) else ""
+                    if market != "NZ":
+                        continue
+                    notes = str(row[notes_col]).strip().lower() if notes_col < len(row) else ""
+                    notes_ok = not notes or "auto" in notes
+                    if not notes_ok:
+                        continue
+
+                    net_cash_value = row[net_cash_col] if net_cash_col < len(row) else ""
+                    fcf1_value = row[fcf1_col] if fcf1_col < len(row) else ""
+                    net_cash_blank = _is_blank_or_zero_strict(net_cash_value)
+                    fcf1_blank = _is_blank_or_zero_strict(fcf1_value)
+                    if not net_cash_blank and not fcf1_blank:
+                        continue
+
+                    ticker_norm = _normalize_nz_ticker(ticker)
+                    source_entry = sources_map.get(ticker_norm)
+                    if not source_entry:
+                        print(f"NZ Sources missing for {ticker_norm}")
+                        missing_sources.add(ticker_norm)
+                        continue
+
+                    row_updated = False
+                    if net_cash_blank and source_entry.get("netcash_bn") is not None:
+                        updates.append((row_idx, net_cash_col + 1, source_entry.get("netcash_bn")))
+                        fields_updated["net_cash"] += 1
+                        row_updated = True
+                    elif net_cash_blank:
+                        print(f"NZ Sources missing NetCash_bn for {ticker_norm}")
+
+                    if fcf1_blank and source_entry.get("fcf1_bn") is not None:
+                        updates.append((row_idx, fcf1_col + 1, source_entry.get("fcf1_bn")))
+                        fields_updated["fcf1"] += 1
+                        row_updated = True
+                    elif fcf1_blank:
+                        print(f"NZ Sources missing FCF1_bn for {ticker_norm}")
+
+                    if row_updated:
+                        updated_tickers.add(ticker_norm)
+                        url = str(source_entry.get("url") or "").strip()
+                        if url and links_col < len(row):
+                            existing_links = str(row[links_col] or "").strip()
+                            if url not in existing_links:
+                                new_links = f"{existing_links}\n{url}" if existing_links else url
+                                updates.append((row_idx, links_col + 1, new_links))
+                                fields_updated["links"] += 1
+
+                if updates:
+                    cell_list = [inputs_ws.cell(r, c) for r, c, _ in updates]
+                    for cell, (_, _, value) in zip(cell_list, updates):
+                        cell.value = value
+                    inputs_ws.update_cells(cell_list, value_input_option="USER_ENTERED")
+
+                if updated_tickers:
+                    st.write("Tickers updated:", ", ".join(sorted(updated_tickers)))
+                st.write(
+                    "Fields updated:",
+                    f"net_cash={fields_updated.get('net_cash', 0)}, "
+                    f"fcf1={fields_updated.get('fcf1', 0)}, "
+                    f"links={fields_updated.get('links', 0)}",
+                )
+                if missing_sources:
+                    st.warning("Missing Sources data for: " + ", ".join(sorted(missing_sources)))
                 status.update(label="NZ fundamentals refresh complete", state="complete")
             _load_app_data.clear()
             _refresh()

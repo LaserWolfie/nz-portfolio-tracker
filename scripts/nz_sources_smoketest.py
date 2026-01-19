@@ -9,8 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.sheets import get_gspread_client
-from src.services.sources_registry import find_best_source, load_sources
+from src.services.nz_sources_lookup import load_sources_wide
 
 
 def _format(value):
@@ -38,24 +37,27 @@ def main() -> int:
     if not sheet_id:
         print("Missing return_ladder_template_sheet_id in secrets.")
         return 1
-    sources_tab = str(st.secrets.get("return_ladder_template_sources_tab", "Sources")).strip()
-
-    client = get_gspread_client()
-    ss = client.open_by_key(sheet_id)
-    sources = load_sources(ss, sources_tab)
+    sources_map = load_sources_wide(sheet_id)
 
     for ticker in tickers:
-        ticker_norm = _normalize_ticker(ticker)
-        entry = find_best_source(sources, ticker_norm, None)
+        key = _normalize_ticker(ticker)
+        entry = sources_map.get(key)
+        resolved_key = key
         if not entry:
-            print(f"{ticker_norm}: MISSING source entry")
-            continue
-        url = entry.get("url")
-        netcash = entry.get("netcash_bn")
-        fcf1 = entry.get("fcf1_bn")
+            alias_key = "EBOS" if key == "EBO" else "EBO" if key == "EBOS" else None
+            if alias_key:
+                entry = sources_map.get(alias_key)
+                resolved_key = alias_key if entry else "None"
+        if not entry:
+            resolved_key = "None"
+        url_text = _format(entry.get("url")) if entry else "None"
+        netcash = entry.get("netcash_bn") if entry else None
+        fcf1 = entry.get("fcf1_bn") if entry else None
         print(
-            f"{ticker_norm} | url={_format(url)} | "
-            f"netcash_bn={_format(netcash)} | fcf1_bn={_format(fcf1)}"
+            f"{ticker} | resolved_key={resolved_key} | "
+            f"netcash_bn={_format(netcash)} | "
+            f"fcf1_bn={_format(fcf1)} | "
+            f"url={url_text}"
         )
     return 0
 

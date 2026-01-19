@@ -37,8 +37,30 @@ def load_sources(sheet_client, tab_name: str = "Sources") -> dict[str, dict[str,
     ticker_col = _col("Ticker")
     company_col = _col("Company")
     url_col = _col("URL")
-    netcash_col = _col("NetCash_bn")
-    fcf_col = _col("FCF1_bn")
+
+    def _col_any(names: list[str]) -> int | None:
+        for name in names:
+            idx = _col(name)
+            if idx is not None:
+                return idx
+        return None
+
+    netcash_col = _col_any(
+        [
+            "NetCash_bn",
+            "Net cash/(debt) (bn)",
+            "Net Cash / Debt",
+            "Net cash / debt",
+            "Net cash/(debt)",
+        ]
+    )
+    fcf_col = _col_any(
+        [
+            "FCF1_bn",
+            "FCF1 (next-year, bn)",
+            "FCF1",
+        ]
+    )
 
     entries: dict[str, dict[str, Any]] = {}
     for row in values[1:]:

@@ -119,6 +119,8 @@ INPUTS_MASTER_SYNONYMS = {
     "netcashbn": "NetCash_bn",
     "netcash": "NetCash_bn",
     "netdebt": "NetCash_bn",
+    "netcashdebt": "NetCash_bn",
+    "netcashdebtbn": "NetCash_bn",
     "fcfbn": "FCF_bn",
     "fcf": "FCF_bn",
     "fcf1bn": "FCF1_bn",
@@ -159,6 +161,18 @@ def _parse_price(value: str) -> float | None:
         return None
     try:
         return float(str(value).replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def _parse_float_cell(value) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text.replace(",", ""))
     except ValueError:
         return None
 
@@ -944,6 +958,7 @@ for row in rows:
         inputs_map[key] = row
 
 union_rows = []
+unit_warnings = []
 if refresh_scope == "Inputs only" or not inputs_master_rows:
     union_rows = list(inputs_map.values())
 else:
@@ -974,6 +989,17 @@ else:
             base_row["net_cash_or_debt"] = float(master_row.get("NetCash_bn") or 0) * 1e9
         if master_row.get("FCF1_bn") not in (None, "", 0, 0.0):
             base_row["fcf1"] = float(master_row.get("FCF1_bn") or 0) * 1e9
+        if market == "NZ":
+            raw_net_cash_bn = _parse_float_cell(master_row.get("NetCash_bn"))
+            if raw_net_cash_bn is not None and raw_net_cash_bn > 1000:
+                unit_warnings.append(
+                    f"{symbol}: Net cash/(debt) looks like full dollars; INPUTS_MASTER expects billions."
+                )
+            raw_fcf1_bn = _parse_float_cell(master_row.get("FCF1_bn"))
+            if raw_fcf1_bn is not None and raw_fcf1_bn > 1000:
+                unit_warnings.append(
+                    f"{symbol}: FCF1 looks like full dollars; INPUTS_MASTER expects billions."
+                )
         if master_row.get("G_5Y") not in (None, "", 0, 0.0):
             base_row["g_5y"] = _parse_rate(master_row.get("G_5Y"))
         if master_row.get("G_Terminal") not in (None, "", 0, 0.0):
@@ -1129,6 +1155,12 @@ st.session_state["return_ladder_rows"] = final_df
 
 if fundamentals_warnings:
     st.warning("Fundamentals warnings:\n" + "\n".join(f"- {w}" for w in fundamentals_warnings))
+
+if unit_warnings:
+    st.warning(
+        "Unit warnings:\n"
+        + "\n".join(f"- {w} (divide by 1e9 if needed).")
+    )
 
 net_cash_warnings = []
 for row in final_df.to_dict(orient="records"):
