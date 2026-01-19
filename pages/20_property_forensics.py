@@ -15,6 +15,8 @@ from gspread.utils import rowcol_to_a1
 import json
 from modules import utils
 
+ENABLE_AI_UPSERT = False
+
 # --- CONFIGURATION ---
 st.set_page_config(page_title="NZ Wealth Manager Pro — Property Forensics", page_icon="🏢", layout="wide")
 
@@ -226,15 +228,21 @@ df['Scenario_Yield'] = (df['Scenario_Distribution'] / df['Original_Value'] * 100
 scenario_label = f"{rate_adjustment:+.2f}% Rates" if rate_adjustment != 0 else "Current Rates"
 
 # --- DASHBOARD LAYOUT ---
+if "pf_view" not in st.session_state:
+    st.session_state["pf_view"] = "Upload Report (AI Scanner)"
+view = st.radio(
+    "View",
+    ["Upload Report (AI Scanner)", "Portfolio Dashboard"],
+    horizontal=True,
+    key="pf_view",
+    label_visibility="collapsed",
+)
 st.title("🏢 NZ Wealth Manager Pro — Property Forensics")
-
-# Create Tabs to separate View vs Input
-tab_dash, tab_upload = st.tabs(["📊 Portfolio Dashboard", "📄 Upload Report (AI Scanner)"])
 
 # ==========================================
 # TAB 1: FORENSIC DASHBOARD
 # ==========================================
-with tab_dash:
+if view == "Portfolio Dashboard":
     # --- 1. PORTFOLIO SEGMENTATION & METRICS ---
     parents_df = df[df['Owner_Entity'] != 'Gold Recovery Ltd']
     bryn_df = df[df['Owner_Entity'] == 'Gold Recovery Ltd']
@@ -351,7 +359,11 @@ with tab_dash:
 
     with rt4:
         st.markdown("**Detailed Asset Forensics**")
-        st.write(df[['Entity_Name', 'Interest_Cover', 'Vacancy_Percent', 'Expense_Ratio']])
+        st.write(
+            df[['Entity_Name', 'Interest_Cover', 'Vacancy_Percent', 'Expense_Ratio']].rename(
+                columns={'Interest_Cover': 'Interest_Cover (Net Profit / Interest)'}
+            )
+        )
 
     st.markdown("---")
 
@@ -362,8 +374,17 @@ with tab_dash:
 # ==========================================
 # TAB 2: AI REPORT SCANNER
 # ==========================================
-with tab_upload:
+else:
     st.header("📄 PDF Report Scanner")
+    with st.expander("How to calculate LVR (Loan-to-Value)"):
+        st.write("LVR = Interest-bearing debt  Property value")
+        st.markdown(
+            "- Interest-bearing debt (Borrowings / Bank loan / Facility / Term liabilities)  "
+            "sum current + non-current if split; exclude trade payables\n"
+            "- Property value (Investment property / Property assets / Valuation / Fair value)"
+        )
+        st.markdown("Debt = $A\nProperty value = $B\nLVR = A  B = X%")
+    st.caption("Tip: Use interest-bearing debt only (not all liabilities).")
     st.markdown("Upload an Annual Report PDF. Gemini AI will extract the forensic data for you.")
     
     if "GEMINI_API_KEY" in st.secrets:
@@ -421,76 +442,14 @@ with tab_upload:
 
     if "scanned_data" in st.session_state:
         st.subheader("Review Extracted Data")
-        st.json(st.session_state["scanned_data"])
-        edit_df = pd.DataFrame([st.session_state["scanned_data"]])
-        edited_df = st.data_editor(edit_df, num_rows="fixed", use_container_width=True)
-        if st.button("Save to Google Sheet"):
-            edited_data = edited_df.iloc[0].to_dict()
-            if save_to_google_sheet(edited_data):
-                load_property_df.clear()
-                st.session_state.prop_df = load_property_df()
-                st.session_state["prop_df_refreshed_at"] = datetime.utcnow().isoformat()
-                st.success("Saved to Google Sheets and refreshed property data.")
-                st.rerun()
-        if st.button("Normalize existing row in Google Sheet"):
-            entity_name = str(edited_df.iloc[0].get("Entity_Name", "")).strip()
-            if not entity_name:
-                st.error("Entity_Name is required to normalize.")
-            else:
-                try:
-                    client = get_gspread_client()
-                    sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
-                    values = sheet.get_all_values()
-                    if not values:
-                        st.error("Property sheet has no headers.")
-                    else:
-                        headers = values[0]
-                        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
-                        if "entity_name" not in header_norm:
-                            st.error("Entity_Name column not found.")
-                        else:
-                            entity_col = header_norm.index("entity_name")
-                            target_row = None
-                            for idx, row_vals in enumerate(values[1:], start=2):
-                                existing = str(row_vals[entity_col]).strip()
-                                if existing.lower() == entity_name.lower():
-                                    target_row = idx
-                                    break
-                            if not target_row:
-                                st.error("Entity_Name not found in sheet.")
-                            else:
-                                fields = [
-                                    "lvr_percent",
-                                    "vacancy_percent",
-                                    "expense_ratio",
-                                    "debt_yield",
-                                    "interest_cover",
-                                    "walt_years",
-                                ]
-                                header_map = {name: idx for idx, name in enumerate(header_norm)}
-                                updated = 0
-                                for field in fields:
-                                    if field not in header_map:
-                                        continue
-                                    idx = header_map[field]
-                                    current = values[target_row - 1][idx] if idx < len(values[target_row - 1]) else ""
-                                    norm_val = normalize_whitelist_value(field, current)
-                                    if norm_val is None:
-                                        continue
-                                    if str(current).strip() == "":
-                                        sheet.update_cell(target_row, idx + 1, norm_val)
-                                        updated += 1
-                                        continue
-                                    try:
-                                        current_num = float(str(current).replace(",", "").replace("%", "").replace("x", "").strip())
-                                    except Exception:
-                                        current_num = None
-                                    if current_num is None or abs(current_num - float(norm_val)) > 1e-9:
-                                        sheet.update_cell(target_row, idx + 1, norm_val)
-                                        updated += 1
-                                if updated:
-                                    load_property_df.clear()
-                                    st.session_state.prop_df = load_property_df()
-                                st.info(f"Normalized {updated} fields" if updated else "No changes needed")
-                except Exception as e:
-                    st.error(f"Normalize Error: {e}")
+        st.caption("Interest_Cover = Net Profit / Interest Expense (not EBIT).")
+        with st.expander("How Interest_Cover is calculated"):
+            st.write("Formula: Net Profit / Interest Expense")
+            st.write("EBIT-style cover is different; this app uses the Net Profit basis.")
+        with st.expander("Review extracted data (before updating Google Sheet)"):
+            st.json(st.session_state["scanned_data"])
+            edit_df = pd.DataFrame([st.session_state["scanned_data"]])
+            edited_df = st.data_editor(edit_df, num_rows="fixed", use_container_width=True)
+            reviewed_ok = st.checkbox("I have reviewed the data and it looks OK", value=False)
+            if st.button("Update Google Sheet", disabled=not reviewed_ok):
+                st.info("TODO: write in next step")
