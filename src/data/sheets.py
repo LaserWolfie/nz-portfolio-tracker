@@ -13,6 +13,26 @@ from src.config import (
 )
 from src.utils.cleaning import robust_numeric_clean
 
+REQUIRED_PROPERTY_COLS = {"Entity_Name", "Payout_Ratio"}
+_DEBUG_PROP_COLS = False
+
+
+def _normalize_ratio(value):
+    if pd.isna(value):
+        return pd.NA
+    s = str(value).strip()
+    if s == "":
+        return pd.NA
+    has_percent = "%" in s
+    s = s.replace("%", "").replace(",", "").strip()
+    try:
+        num = float(s)
+    except Exception:
+        return pd.NA
+    if has_percent or (num > 1.0 and num <= 100.0):
+        return num / 100.0
+    return num
+
 
 @st.cache_resource
 def get_gspread_client():
@@ -153,6 +173,9 @@ def load_property_df():
         headers = [str(h).strip() for h in values[0]]
         df = pd.DataFrame(values[1:], columns=headers)
         df.columns = [c.replace(" ", "_") for c in df.columns]
+        if "Payout_Ratio" not in df.columns:
+            df["Payout_Ratio"] = pd.NA
+        df["Payout_Ratio"] = df["Payout_Ratio"].apply(_normalize_ratio)
         return _coerce_numeric_columns(df)
     except Exception as exc:
         st.error(f"Property sheet sync failed: {exc}")
@@ -211,11 +234,22 @@ def load_personal_assets_csv():
     return pd.DataFrame()
 
 
-def ensure_data_loaded():
+def ensure_data_loaded(force_refresh: bool = False):
+    if force_refresh:
+        st.cache_data.clear()
+        load_stock_df.clear()
+        load_property_df.clear()
+        load_signals_df.clear()
     if "stock_df" not in st.session_state or st.session_state.stock_df.empty:
         st.session_state.stock_df = load_stock_df()
     if "prop_df" not in st.session_state or st.session_state.prop_df.empty:
         st.session_state.prop_df = load_property_df()
+    if "prop_df" in st.session_state and not st.session_state.prop_df.empty:
+        missing = REQUIRED_PROPERTY_COLS - set(st.session_state.prop_df.columns)
+        if missing:
+            if _DEBUG_PROP_COLS:
+                print(f"[prop_df] Missing columns: {sorted(missing)}")
+            st.session_state.prop_df = load_property_df()
     if "signals_df" not in st.session_state or st.session_state.signals_df.empty:
         st.session_state.signals_df = load_signals_df()
     if "personal_df" not in st.session_state or st.session_state.personal_df.empty:
@@ -235,4 +269,4 @@ def clear_app_caches():
         "market_context_asof",
     ):
         st.session_state.pop(key, None)
-    ensure_data_loaded()
+    ensure_data_loaded(force_refresh=True)
