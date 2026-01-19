@@ -1,0 +1,46 @@
+# Aider ignore (separate from .gitignore)
+# Keep chats focused on code/config; skip large/binary exports + local caches.
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+
+# Python caches / venvs
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+pip-wheel-metadata/
+.eggs/
+*.egg-info/
+
+# Streamlit / local secrets
+.streamlit/secrets.toml
+.streamlit/*.log
+
+# Data exports / binaries
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+*.pdf
+*.xlsx
+*.xls
+*.pptx
+*.docx
+*.zip
+*.7z
+*.tar
+*.gz
+
+# Logs
+*.log
+
+# Node (if present)
+node_modules/
