@@ -4,6 +4,7 @@ ensure_data_loaded()
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from modules import utils
 
 st.set_page_config(page_title="NZ Wealth Manager Pro — Portfolio Dashboard", page_icon="📊", layout="wide")
@@ -21,6 +22,14 @@ df.columns = [c.replace(' ', '_') for c in df.columns]
 df['Current_Value'] = df['Current_Value'].apply(clean_number)
 df['Original_Value'] = df['Original_Value'].apply(clean_number)
 df['Annual_Distribution'] = df['Annual_Distribution'].apply(clean_number)
+if "Last_Updated" not in df.columns:
+    df["Last_Updated"] = pd.NA
+
+current_date = datetime.now(ZoneInfo("Pacific/Auckland")).date()
+quarter_start_month = ((current_date.month - 1) // 3) * 3 + 1
+quarter_start = datetime(current_date.year, quarter_start_month, 1).date()
+last_updated = pd.to_datetime(df["Last_Updated"], errors="coerce").dt.date
+df["Updated_This_Quarter"] = last_updated >= quarter_start
 
 st.title("📊 NZ Wealth Manager Pro — Portfolio Dashboard")
 
@@ -129,9 +138,35 @@ if not personal_df.empty:
 
 # --- SYNDICATE DETAILS ---
 st.subheader("🔎 Syndicate Details")
-display_cols = ['Entity_Name', 'Owner_Entity', 'Original_Value', 'Current_Value', 'Annual_Distribution']
-st.dataframe(df[display_cols].style.format({
-    "Original_Value": "${:,.0f}", 
-    "Current_Value": "${:,.0f}", 
-    "Annual_Distribution": "${:,.0f}"
-}), use_container_width=True)
+display_cols = [
+    'Entity_Name',
+    'Owner_Entity',
+    'Original_Value',
+    'Current_Value',
+    'Annual_Distribution',
+    'Updated_This_Quarter',
+]
+
+def _highlight_updated(val):
+    if pd.isna(val):
+        return ""
+    color = "#2e7d32" if bool(val) else "#c62828"
+    return f"background-color: {color}; color: white;"
+
+def _format_updated(val):
+    if pd.isna(val):
+        return ""
+    return "Yes" if bool(val) else "No"
+
+display_df = df[display_cols].rename(columns={"Updated_This_Quarter": "Updated (This Qtr)"})
+st.dataframe(
+    display_df.style.format(
+        {
+            "Original_Value": "${:,.0f}",
+            "Current_Value": "${:,.0f}",
+            "Annual_Distribution": "${:,.0f}",
+            "Updated (This Qtr)": _format_updated,
+        }
+    ).applymap(_highlight_updated, subset=["Updated (This Qtr)"]),
+    use_container_width=True,
+)
