@@ -7,6 +7,8 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
+import os
+import re
 import google.generativeai as genai
 import gspread
 from gspread.utils import rowcol_to_a1
@@ -25,11 +27,88 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. HELPER FUNCTIONS ---
-def clean_number(x):
-    return utils.clean_number(x)
+def is_blankish(x):
+    if x is None:
+        return True
+    s = str(x).strip().lower()
+    return s in {"", "-", "none", "null", "nan", "n/a", "#n/a", "#value!", "#div/0!"}
+
+
+def clean_number(value, default=0.0, nan_on_invalid=False):
+    try:
+        return utils.clean_number(value, default=default, nan_on_invalid=nan_on_invalid)
+    except TypeError:
+        result = utils.clean_number(value, default=default)
+        if nan_on_invalid and result == default and is_blankish(value):
+            return float("nan")
+        return result
 
 def clean_percent(x):
     return utils.clean_percent(x)
+
+def normalize_whitelist_value(field, value):
+    if value is None:
+        return None
+    percent_fields = {"lvr_percent", "vacancy_percent", "expense_ratio", "debt_yield"}
+    s = str(value).strip()
+    if s == "":
+        return None
+    s_lower = s.lower()
+    if s_lower == "nil":
+        return 0.0 if field == "vacancy_percent" else None
+    if s_lower in {"-", "none", "null", "nan", "n/a", "na"}:
+        return 0.0 if field == "vacancy_percent" else None
+    if field == "interest_cover":
+        s = s.replace("x", "").replace("X", "").strip()
+    if field == "loan_expiry_year":
+        match = re.search(r"\b(19|20)\d{2}\b", s)
+        if match:
+            year = int(match.group(0))
+            return year if 1900 <= year <= 2100 else None
+        try:
+            year = int(float(s.replace(",", "")))
+            return year if 1900 <= year <= 2100 else None
+        except Exception:
+            return None
+    has_percent = "%" in s
+    if any(ch in s.upper() for ch in ["M", "B", "K"]) and not has_percent:
+        return None
+    s_num = s.replace("$", "").replace(",", "").replace("%", "").replace("NZD", "").strip()
+    try:
+        num = float(s_num)
+    except Exception:
+        return None
+    if field in percent_fields:
+        if has_percent or num > 1.0:
+            if num > 100.0:
+                return None
+            num = num / 100.0
+        return num
+    return num
+
+def post_process_distributions(data_dict):
+    cleared = False
+    for key in ("Annual_Distribution", "Original_Distribution"):
+        val = data_dict.get(key)
+        if isinstance(val, str) and "%" in val:
+            data_dict[key] = None
+            cleared = True
+            continue
+        parsed = clean_number(val, nan_on_invalid=True)
+        if pd.isna(parsed):
+            data_dict[key] = None
+            continue
+        if parsed < 500:
+            data_dict[key] = None
+            cleared = True
+            continue
+        data_dict[key] = parsed
+    if cleared:
+        st.warning(
+            "Cash distribution not confidently found; field cleared to prevent overwriting. "
+            "Enter cash $ manually if known."
+        )
+    return data_dict
 
 def save_to_google_sheet(data_dict):
     """Upserts extracted data to the Google Sheet (match by Entity_Name)."""
@@ -48,38 +127,8 @@ def save_to_google_sheet(data_dict):
             st.error("Save Error: Entity_Name column not found.")
             return False
 
-        defaults = {
-            "Entity_Name": "",
-            "Owner_Entity": "Other",
-            "Manager": "Unknown",
-            "Original_Value": 0,
-            "Current_Value": 0,
-            "Original_Distribution": 0,
-            "Annual_Distribution": 0,
-            "LVR_Percent": 0,
-            "WALT_Years": 0,
-            "Vacancy_Percent": 0,
-            "Distribution_At_Risk": "No",
-            "Capital_Raise": 0,
-            "Capex_Planned": 0,
-            "Expense_Ratio": 0,
-            "Debt_Yield": 0,
-            "CapEx_Reserves": 0,
-            "Loan_Expiry_Year": "",
-            "Sector": "Other",
-            "Interest_Cover": 0,
-        }
         data_norm = {str(k).strip().lower().replace(" ", "_"): v for k, v in data_dict.items()}
-
-        row = []
-        defaults_norm = {k.lower(): v for k, v in defaults.items()}
-        for header in header_norm:
-            if header in data_norm:
-                row.append(data_norm[header])
-            elif header in defaults_norm:
-                row.append(defaults_norm[header])
-            else:
-                row.append("")
+        header_map = {name: idx for idx, name in enumerate(header_norm)}
 
         entity_value = str(data_norm.get("entity_name", "")).strip()
         if not entity_value:
@@ -94,12 +143,39 @@ def save_to_google_sheet(data_dict):
                 target_row = idx
                 break
 
+        whitelist = [
+            "lvr_percent",
+            "walt_years",
+            "vacancy_percent",
+            "expense_ratio",
+            "debt_yield",
+            "loan_expiry_year",
+            "interest_cover",
+        ]
+
         if target_row:
-            start = rowcol_to_a1(target_row, 1)
-            end = rowcol_to_a1(target_row, len(headers))
-            sheet.update(f"{start}:{end}", [row])
+            for field in whitelist:
+                if field not in header_map:
+                    continue
+                if field not in data_norm:
+                    continue
+                norm_val = normalize_whitelist_value(field, data_norm[field])
+                if norm_val is None:
+                    continue
+                sheet.update_cell(target_row, header_map[field] + 1, norm_val)
         else:
+            row = ["" for _ in headers]
+            row[entity_col_idx] = entity_value
+            for field in whitelist:
+                if field not in header_map or field not in data_norm:
+                    continue
+                norm_val = normalize_whitelist_value(field, data_norm[field])
+                if norm_val is None:
+                    continue
+                row[header_map[field]] = norm_val
             sheet.append_row(row)
+        load_property_df.clear()
+        st.session_state.prop_df = load_property_df()
         return True
     except Exception as e:
         st.error(f"Save Error: {e}")
@@ -116,7 +192,9 @@ df = df[~df['Entity_Name'].astype(str).str.lower().str.contains('total', na=Fals
 df['Current_Value'] = df['Current_Value'].apply(clean_number)
 df['Original_Value'] = df['Original_Value'].apply(clean_number)
 df['Annual_Distribution'] = df['Annual_Distribution'].apply(clean_number)
-df['LVR_Percent'] = df['LVR_Percent'].apply(clean_percent)
+for col in ['LVR_Percent', 'Vacancy_Percent', 'Expense_Ratio', 'Debt_Yield']:
+    if col in df.columns:
+        df[col] = df[col].apply(clean_percent)
 
 # --- ADVANCED COLUMNS ---
 adv_cols = {
@@ -304,16 +382,115 @@ with tab_upload:
                     model = genai.GenerativeModel('gemini-2.0-flash')
                     pdf_data = uploaded_file.read()
                     
-                    prompt = "Extract forensic property metrics from this PDF and return as JSON."
+                    prompt = (
+                        "Return ONLY valid JSON (no markdown). If unknown, use null. "
+                        "Do NOT output or guess: Owner_Entity, Manager, Sector, "
+                        "Entity_Name casing changes, Original_Value, Current_Value, "
+                        "Original_Annual_Distribution, Annual_Distribution. "
+                        "Return ONLY these keys with types: "
+                        "{"
+                        "\"Entity_Name\": string, "
+                        "\"LVR_Percent\": number | null (decimal fraction, e.g. 0.3069), "
+                        "\"WALT_Years\": number | null, "
+                        "\"Vacancy_Percent\": number | null (decimal fraction; interpret \"Nil\" as 0), "
+                        "\"Expense_Ratio\": number | null (decimal fraction), "
+                        "\"Debt_Yield\": number | null (decimal fraction), "
+                        "\"Loan_Expiry_Year\": integer | null, "
+                        "\"Interest_Cover\": number | null (numeric ratio, no \"x\")"
+                        "}. "
+                        "Prefer computing Interest_Cover from the income statement "
+                        "(operating profit before finance / interest expense). "
+                        "If you cannot compute confidently, return null."
+                    )
                     response = model.generate_content([{'mime_type': 'application/pdf', 'data': pdf_data}, prompt])
                     cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
-                    st.session_state['scanned_data'] = json.loads(cleaned_text)
-                    if save_to_google_sheet(st.session_state['scanned_data']):
-                        load_property_df.clear()
-                        st.session_state.prop_df = load_property_df()
-                        st.session_state["prop_df_refreshed_at"] = datetime.utcnow().isoformat()
-                        st.success("Saved to Google Sheets and refreshed property data.")
-                        st.rerun()
+                    scanned_data = json.loads(cleaned_text)
+                    if isinstance(scanned_data, dict):
+                        scanned_data = post_process_distributions(scanned_data)
+                    if isinstance(scanned_data, dict):
+                        entity_name = str(scanned_data.get("Entity_Name", "")).strip()
+                        if not entity_name:
+                            fallback = os.path.splitext(uploaded_file.name)[0]
+                            fallback = fallback.replace("_", " ").replace("-", " ").strip()
+                            scanned_data["Entity_Name"] = fallback
+                            st.warning("Entity_Name missing; used filename fallback.")
+                    st.session_state["scanned_data"] = scanned_data
                     st.success("✅ Extraction Complete!")
                 except Exception as e:
                     st.error(f"AI Error: {e}")
+
+    if "scanned_data" in st.session_state:
+        st.subheader("Review Extracted Data")
+        st.json(st.session_state["scanned_data"])
+        edit_df = pd.DataFrame([st.session_state["scanned_data"]])
+        edited_df = st.data_editor(edit_df, num_rows="fixed", use_container_width=True)
+        if st.button("Save to Google Sheet"):
+            edited_data = edited_df.iloc[0].to_dict()
+            if save_to_google_sheet(edited_data):
+                load_property_df.clear()
+                st.session_state.prop_df = load_property_df()
+                st.session_state["prop_df_refreshed_at"] = datetime.utcnow().isoformat()
+                st.success("Saved to Google Sheets and refreshed property data.")
+                st.rerun()
+        if st.button("Normalize existing row in Google Sheet"):
+            entity_name = str(edited_df.iloc[0].get("Entity_Name", "")).strip()
+            if not entity_name:
+                st.error("Entity_Name is required to normalize.")
+            else:
+                try:
+                    client = get_gspread_client()
+                    sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
+                    values = sheet.get_all_values()
+                    if not values:
+                        st.error("Property sheet has no headers.")
+                    else:
+                        headers = values[0]
+                        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
+                        if "entity_name" not in header_norm:
+                            st.error("Entity_Name column not found.")
+                        else:
+                            entity_col = header_norm.index("entity_name")
+                            target_row = None
+                            for idx, row_vals in enumerate(values[1:], start=2):
+                                existing = str(row_vals[entity_col]).strip()
+                                if existing.lower() == entity_name.lower():
+                                    target_row = idx
+                                    break
+                            if not target_row:
+                                st.error("Entity_Name not found in sheet.")
+                            else:
+                                fields = [
+                                    "lvr_percent",
+                                    "vacancy_percent",
+                                    "expense_ratio",
+                                    "debt_yield",
+                                    "interest_cover",
+                                    "walt_years",
+                                ]
+                                header_map = {name: idx for idx, name in enumerate(header_norm)}
+                                updated = 0
+                                for field in fields:
+                                    if field not in header_map:
+                                        continue
+                                    idx = header_map[field]
+                                    current = values[target_row - 1][idx] if idx < len(values[target_row - 1]) else ""
+                                    norm_val = normalize_whitelist_value(field, current)
+                                    if norm_val is None:
+                                        continue
+                                    if str(current).strip() == "":
+                                        sheet.update_cell(target_row, idx + 1, norm_val)
+                                        updated += 1
+                                        continue
+                                    try:
+                                        current_num = float(str(current).replace(",", "").replace("%", "").replace("x", "").strip())
+                                    except Exception:
+                                        current_num = None
+                                    if current_num is None or abs(current_num - float(norm_val)) > 1e-9:
+                                        sheet.update_cell(target_row, idx + 1, norm_val)
+                                        updated += 1
+                                if updated:
+                                    load_property_df.clear()
+                                    st.session_state.prop_df = load_property_df()
+                                st.info(f"Normalized {updated} fields" if updated else "No changes needed")
+                except Exception as e:
+                    st.error(f"Normalize Error: {e}")
