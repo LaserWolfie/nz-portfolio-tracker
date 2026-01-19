@@ -88,6 +88,75 @@ def normalize_whitelist_value(field, value):
         return num
     return num
 
+
+def update_sheet_whitelist_fields(data_dict):
+    entity_name = str(data_dict.get("Entity_Name", "")).strip()
+    if not entity_name:
+        st.error("Entity_Name is required to update.")
+        return False
+
+    whitelist = {
+        "LVR_Percent",
+        "WALT_Years",
+        "Vacancy_Percent",
+        "Expense_Ratio",
+        "Debt_Yield",
+        "Loan_Expiry_Year",
+        "Interest_Cover",
+    }
+
+    try:
+        client = get_gspread_client()
+        sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
+        values = sheet.get_all_values()
+        if not values:
+            st.error("Property sheet has no headers.")
+            return False
+
+        headers = values[0]
+        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
+        if "entity_name" not in header_norm:
+            st.error("Entity_Name column not found.")
+            return False
+
+        entity_col = header_norm.index("entity_name")
+        target_row = None
+        for idx, row_vals in enumerate(values[1:], start=2):
+            existing = str(row_vals[entity_col]).strip()
+            if existing.lower() == entity_name.lower():
+                target_row = idx
+                break
+
+        if not target_row:
+            st.error("Entity_Name not found in sheet. No changes made.")
+            return False
+
+        updated = 0
+        for key, value in data_dict.items():
+            if key not in whitelist:
+                continue
+            norm_key = key.strip().lower().replace(" ", "_")
+            if norm_key not in header_norm:
+                continue
+            norm_val = normalize_whitelist_value(norm_key, value)
+            if norm_val is None:
+                continue
+            col_idx = header_norm.index(norm_key)
+            sheet.update_cell(target_row, col_idx + 1, norm_val)
+            updated += 1
+
+        if updated:
+            st.cache_data.clear()
+            load_property_df.clear()
+            st.session_state.prop_df = load_property_df()
+            st.success("Updated Google Sheet (whitelist fields only).")
+        else:
+            st.info("No changes needed.")
+        return True
+    except Exception as e:
+        st.error(f"Update Error: {e}")
+        return False
+
 def post_process_distributions(data_dict):
     cleared = False
     for key in ("Annual_Distribution", "Original_Distribution"):
@@ -450,6 +519,61 @@ else:
             st.json(st.session_state["scanned_data"])
             edit_df = pd.DataFrame([st.session_state["scanned_data"]])
             edited_df = st.data_editor(edit_df, num_rows="fixed", use_container_width=True)
+            entity_name = str(edited_df.iloc[0].get("Entity_Name", "")).strip()
+            if entity_name:
+                try:
+                    client = get_gspread_client()
+                    sheet = client.open_by_key(PROPERTY_SHEET_ID).worksheet(PROPERTY_TAB)
+                    values = sheet.get_all_values()
+                    if values:
+                        headers = values[0]
+                        header_norm = [str(h).strip().lower().replace(" ", "_") for h in headers]
+                        if "entity_name" in header_norm:
+                            entity_col = header_norm.index("entity_name")
+                            target_row = None
+                            for idx, row_vals in enumerate(values[1:], start=2):
+                                existing = str(row_vals[entity_col]).strip()
+                                if existing.lower() == entity_name.lower():
+                                    target_row = idx
+                                    break
+                            if target_row:
+                                row_vals = values[target_row - 1]
+                                preview_rows = []
+                                fields = [
+                                    "LVR_Percent",
+                                    "WALT_Years",
+                                    "Vacancy_Percent",
+                                    "Expense_Ratio",
+                                    "Debt_Yield",
+                                    "Loan_Expiry_Year",
+                                    "Interest_Cover",
+                                ]
+                                for field in fields:
+                                    norm_key = field.lower()
+                                    if norm_key not in header_norm:
+                                        continue
+                                    col_idx = header_norm.index(norm_key)
+                                    current_raw = row_vals[col_idx] if col_idx < len(row_vals) else ""
+                                    new_raw = edited_df.iloc[0].get(field)
+                                    current_norm = normalize_whitelist_value(norm_key, current_raw)
+                                    new_norm = normalize_whitelist_value(norm_key, new_raw)
+                                    will_update = new_norm is not None and (
+                                        current_norm is None or abs(float(new_norm) - float(current_norm)) > 1e-9
+                                    )
+                                    preview_rows.append(
+                                        {
+                                            "Field": field,
+                                            "Current": current_norm if current_norm is not None else current_raw,
+                                            "New": new_norm if new_norm is not None else new_raw,
+                                            "Will Update?": bool(will_update),
+                                        }
+                                    )
+                                if preview_rows:
+                                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+                            else:
+                                st.info("Entity_Name not found in sheet. Preview unavailable.")
+                except Exception:
+                    st.info("Preview unavailable (sheet lookup failed).")
             reviewed_ok = st.checkbox("I have reviewed the data and it looks OK", value=False)
             if st.button("Update Google Sheet", disabled=not reviewed_ok):
-                st.info("TODO: write in next step")
+                update_sheet_whitelist_fields(edited_df.iloc[0].to_dict())
