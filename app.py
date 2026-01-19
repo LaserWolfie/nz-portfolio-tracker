@@ -4,6 +4,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from src.data.sheets import ensure_data_loaded, clear_app_caches
+from modules.utils import robust_numeric_clean
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Wealth Manager Pro", page_icon="💰", layout="wide")
@@ -20,20 +21,6 @@ def init_connection():
     else:
         st.error("🚨 Connection Failed: No credentials found.")
         st.stop()
-
-def robust_numeric_clean(df, column_name):
-    """Safely converts a spreadsheet column to numbers, handling symbols and errors."""
-    df = df.copy()
-    if column_name in df.columns:
-        clean_col = (
-            df[column_name].astype(str)
-            .str.replace(r'[$,%]', '', regex=True)
-            .str.replace(',', '')
-            .str.strip()
-            .replace(['#N/A', '#VALUE!', '#DIV/0!', 'None', 'nan', '', '-'], '0')
-        )
-        df.loc[:, column_name] = pd.to_numeric(clean_col, errors='coerce').fillna(0)
-    return df
 
 @st.cache_data(ttl=600)
 def load_data_from_sheet():
@@ -119,10 +106,13 @@ if not stock_df.empty:
             t_stock = stock_df_for_total[col].sum()
             break
     t_stock = float(st.session_state.get("stock_assets_total", t_stock) or 0)
-    prop_value_series = prop_df.get('Current_Value')
-    if prop_value_series is None:
-        prop_value_series = prop_df.get('Current Value', 0)
-    t_prop = pd.to_numeric(prop_value_series, errors='coerce').sum()
+    t_prop = 0
+    if 'Current_Value' in prop_df.columns:
+        prop_df = robust_numeric_clean(prop_df, 'Current_Value')
+        t_prop = prop_df['Current_Value'].sum()
+    elif 'Current Value' in prop_df.columns:
+        prop_df = robust_numeric_clean(prop_df, 'Current Value')
+        t_prop = prop_df['Current Value'].sum()
     t_personal = pd.to_numeric(personal_df.get('Current_Value', 0), errors='coerce').sum() if not personal_df.empty else 0
     t_personal_debt = pd.to_numeric(personal_df.get('Loan_Balance', 0), errors='coerce').sum() if not personal_df.empty else 0
 
@@ -133,7 +123,10 @@ if not stock_df.empty:
         yields = pd.to_numeric(stock_df_for_total['Div Yield'], errors='coerce').fillna(0)
         yields = yields.apply(lambda v: v / 100 if v > 1 else v)
         stock_income = (vals * yields).sum()
-    prop_income = pd.to_numeric(prop_df.get('Annual_Distribution', 0), errors='coerce').sum() if not prop_df.empty else 0
+    prop_income = 0
+    if not prop_df.empty and 'Annual_Distribution' in prop_df.columns:
+        prop_df = robust_numeric_clean(prop_df, 'Annual_Distribution')
+        prop_income = prop_df['Annual_Distribution'].sum()
     pension_income = 38145
     t_income = stock_income + prop_income + pension_income
     
