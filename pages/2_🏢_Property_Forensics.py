@@ -33,7 +33,8 @@ def get_google_sheet():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
         client = gspread.authorize(creds)
-        return client.open("Share Portfolio")
+        # Property data lives in the "Proportional Property" workbook (not "Share Portfolio")
+        return client.open_by_key("142q0VXqiC6RWSjcS67BGR_ROVLYFtl61QgmRrYhoUkQ")
     except Exception as e:
         st.error(f"🔌 Connection failed: {e}")
         st.stop()
@@ -52,6 +53,11 @@ def load_property_data():
     try:
         data = sheet.worksheet("Syndicate_Data").get_all_records()
         df = pd.DataFrame(data)
+        # The sheet uses different column names than this page expects
+        df = df.rename(columns={
+            "Entity_Name": "Property_Name",
+            "Original_Annual_Distribution": "Initial_Annual_Income",
+        })
         return df
     except Exception as e:
         st.error(f"Could not load 'Syndicate_Data' tab. Error: {e}")

@@ -8,7 +8,7 @@ from datetime import datetime
 import time
 
 # --- NEW: CENTRALIZED AUTHENTICATION ---
-from modules.authentication import connect_to_sheet
+from modules.authentication import connect_to_sheet, get_client
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Portfolio Analyzer", page_icon="🥝", layout="wide")
@@ -63,8 +63,8 @@ def fetch_data():
         # 4. Macro Data (Using the client attached to the workbook)
         macro_data = {}
         try:
-            # We use wb.client to access the external Macro sheet URL
-            m_wb = wb.client.open_by_url(MACRO_SHEET_URL)
+            # Use a full client (wb.client is a low-level HTTPClient without open_by_url)
+            m_wb = get_client().open_by_url(MACRO_SHEET_URL)
             m_sheet = m_wb.worksheet("Dashboard")
             
             macro_data['regime_c2'] = m_sheet.acell('C2').value
@@ -377,7 +377,12 @@ if df_raw is not None:
     with tab1:
         # TABLE
         display_cols = ['Ticker', 'Vol Ratio', 'Market Cap', 'P/E Ratio', 'Analyst Upside', 'Current Price', 'Market Value', 'Day Change %', '30D %', '1Y %', 'Div Yield %', 'Total Gain %']
-        
+
+        # Live sources (yfinance .info, the sheet) can return strings/None for numeric
+        # fields, which breaks the numeric Styler formatters below. Coerce first.
+        for _c in display_cols[1:]:
+            portfolio[_c] = pd.to_numeric(portfolio[_c], errors='coerce')
+
         st.dataframe(
             portfolio[display_cols].style.format({
                 "Current Price": "${:.2f}", "Market Cap": "${:,.0f}", "Market Value": "${:,.0f}", 

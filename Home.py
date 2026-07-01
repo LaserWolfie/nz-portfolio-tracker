@@ -73,19 +73,21 @@ def clean_val(x):
 
 @st.cache_data(ttl=300) 
 def load_data_pro():
-    sheet = get_google_sheet()
-    
-    # 1. Load Stocks
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+    client = gspread.authorize(creds)
+
+    # 1. Load Stocks (get_all_values tolerates the duplicate 'Income' header in this sheet)
     try:
-        s_data = sheet.worksheet("Share Portfolio").get_all_records()
-        stock_df = pd.DataFrame(s_data)
+        s_vals = client.open("Share Portfolio").worksheet("Share Portfolio").get_all_values()
+        stock_df = pd.DataFrame(s_vals[1:], columns=[str(h).strip() for h in s_vals[0]])
         if 'Market Value' not in stock_df.columns: stock_df['Market Value'] = 0
         if 'Est. Annual Income' not in stock_df.columns: stock_df['Est. Annual Income'] = 0
     except: stock_df = pd.DataFrame()
 
-    # 2. Load Syndicates
+    # 2. Load Syndicates (property data lives in the "Proportional Property" workbook)
     try:
-        p_data = sheet.worksheet("Syndicate_Data").get_all_records()
+        p_data = client.open_by_key("142q0VXqiC6RWSjcS67BGR_ROVLYFtl61QgmRrYhoUkQ").worksheet("Syndicate_Data").get_all_records()
         prop_df = pd.DataFrame(p_data)
         if 'Current_Value' not in prop_df.columns: prop_df['Current_Value'] = 0
         if 'Annual_Distribution' not in prop_df.columns: prop_df['Annual_Distribution'] = 0
