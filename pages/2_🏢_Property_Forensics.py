@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
-import google.generativeai as genai
+import anthropic
+import base64
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
@@ -291,28 +292,80 @@ with tab_dash:
 # ==========================================
 with tab_upload:
     st.header("📄 PDF Report Scanner")
-    st.markdown("Upload an Annual Report PDF. Gemini AI will extract the forensic data for you.")
-    
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
+    st.markdown("Upload an Annual Report PDF. Claude will extract the forensic data for you.")
+
+    if "ANTHROPIC_API_KEY" in st.secrets:
+        api_key = st.secrets["ANTHROPIC_API_KEY"]
         st.success("🔑 API Key loaded from secrets")
     else:
-        api_key = st.text_input("Enter Gemini API Key:", type="password")
-    
+        api_key = st.text_input("Enter Anthropic API Key:", type="password")
+
     uploaded_file = st.file_uploader("Drag & Drop Report Here", type=['pdf'])
-    
+
     if uploaded_file and api_key:
         if st.button("🚀 Scan Document", type="primary"):
-            with st.spinner("🤖 AI Analyst is reading the report..."):
+            with st.spinner("🤖 Claude is reading the report..."):
                 try:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel('gemini-2.0-flash')
-                    pdf_data = uploaded_file.read()
-                    
-                    prompt = "Extract forensic property metrics from this PDF and return as JSON."
-                    response = model.generate_content([{'mime_type': 'application/pdf', 'data': pdf_data}, prompt])
-                    cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
-                    st.session_state['scanned_data'] = json.loads(cleaned_text)
+                    pdf_b64 = base64.standard_b64encode(uploaded_file.read()).decode("utf-8")
+
+                    # Constrain the output to the exact columns Syndicate_Data expects
+                    schema = {
+                        "type": "object",
+                        "properties": {
+                            "Entity_Name": {"type": "string"},
+                            "Owner_Entity": {"type": "string"},
+                            "Manager": {"type": "string"},
+                            "Original_Value": {"type": "number"},
+                            "Current_Value": {"type": "number"},
+                            "Original_Distribution": {"type": "number"},
+                            "Annual_Distribution": {"type": "number"},
+                            "LVR_Percent": {"type": "number"},
+                            "WALT_Years": {"type": "number"},
+                            "Vacancy_Percent": {"type": "number"},
+                            "Distribution_At_Risk": {"type": "string"},
+                            "Capital_Raise": {"type": "number"},
+                            "Capex_Planned": {"type": "number"},
+                            "Expense_Ratio": {"type": "number"},
+                            "Debt_Yield": {"type": "number"},
+                            "CapEx_Reserves": {"type": "number"},
+                            "Loan_Expiry_Year": {"type": "string"},
+                            "Sector": {"type": "string"},
+                            "Interest_Cover": {"type": "number"},
+                        },
+                        "required": ["Entity_Name"],
+                        "additionalProperties": False,
+                    }
+
+                    client = anthropic.Anthropic(api_key=api_key)
+                    response = client.messages.create(
+                        model="claude-opus-4-8",
+                        max_tokens=4096,
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "application/pdf",
+                                        "data": pdf_b64,
+                                    },
+                                },
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "This is a property syndicate / fund annual report. "
+                                        "Extract the forensic metrics into the required JSON fields. "
+                                        "Use plain numbers (no $ or % symbols); express percentages as "
+                                        "decimals (e.g. 0.45 for 45%). Omit any field you cannot find."
+                                    ),
+                                },
+                            ],
+                        }],
+                        output_config={"format": {"type": "json_schema", "schema": schema}},
+                    )
+                    text = next(b.text for b in response.content if b.type == "text")
+                    st.session_state['scanned_data'] = json.loads(text)
                     st.success("✅ Extraction Complete!")
                 except Exception as e:
                     st.error(f"AI Error: {e}")
