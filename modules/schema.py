@@ -172,14 +172,27 @@ class SyndicateReport(BaseModel):
     )
     swap_expiries: list[SwapExpiry] = Field(
         description="Every interest rate swap or hedge tranche disclosed. Empty list if "
-        "the report discloses no hedging."
+        "the report discloses no hedging. Dates are usually printed day-first "
+        "(8/06/2026 is 8 June 2026, not 6 August)."
+    )
+    post_balance_date_facility_expiry: DateFigure = Field(
+        description="If the report discloses in its subsequent-events note that the "
+        "facility was refinanced, extended or replaced AFTER the balance date, the expiry "
+        "date of the new facility. Null if no such event is disclosed. This matters "
+        "because a facility expiring weeks after balance date may already have been "
+        "refinanced for years by the time the report is published."
     )
 
     # --- Property performance -------------------------------------------------
     occupancy_percent: Figure = Field(
-        description="Occupancy as a whole percent, e.g. 97.5 for 97.5%. If the report "
-        "states vacancy instead, record vacancy here only if it is explicitly labelled "
-        "occupancy; otherwise null."
+        description="Occupancy as a whole percent, e.g. 97.5 for 97.5%. Record this ONLY "
+        "if the report explicitly labels a figure as occupancy. Never derive it from a "
+        "vacancy figure -- put that in vacancy_percent instead."
+    )
+    vacancy_percent: Figure = Field(
+        description="Vacancy as a whole percent, e.g. 0.24 for 0.24%, where the report "
+        "states vacancy rather than occupancy. Many NZ reports give one or the other, "
+        "not both."
     )
     wale_years: Figure = Field(
         description="Weighted average lease expiry in years, e.g. 4.2. Also reported as "

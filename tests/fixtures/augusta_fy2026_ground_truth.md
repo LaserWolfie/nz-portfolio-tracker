@@ -19,17 +19,39 @@ Cross-checks used where the document is ambiguous are noted.
 | `total_debt` | 53500000 | Summary tile "FY2026 Loan balance $53.5M" |
 | `facility_expiry` | 2026-09-30 | **Narrative only** — "reflecting its maturity on 30 September 2026" |
 | `lvr_percent` | 46.52 | Summary tile. Letter rounds to "an LVR of 47%" |
-| `icr_actual` | **null** | Not disclosed anywhere |
-| `icr_covenant` | **null** | Not disclosed. "Covenant Trustee Services Limited" is the *supervisor* — a trap |
-| `swap_expiries` | `[]` or near-empty | Swaps exist (fair value $47,343) but no expiry or notional is disclosed |
-| `occupancy_percent` | **null** | Not disclosed |
+| `icr_actual` | **null** | Only the covenant is given, not the achieved ratio |
+| `icr_covenant` | 2.0 | p28: "interest cover ratio requires that net rentals are no less than 2.0 times the interest expense". Note "Covenant Trustee Services Limited" is the *supervisor* — a separate trap |
+| `swap_expiries` | 4 tranches, p29 | 13.375M @ 4.89% to 2026-06-08; 13.375M @ 4.18% to 2026-06-05; 26.75M @ 3.43% to 2027-06-08; 13.375M @ 3.43% to 2028-06-06. Dates printed day-first (`8/06/2026`) |
+| `occupancy_percent` | **null** | No occupancy percentage stated. p29 gives *vacancy* of 0.24% and says the property "is fully leased at balance date" — deriving occupancy from these is forbidden |
 | `wale_years` | 3.35 | Summary tile. Letter rounds to "3.4 years" |
 | `distribution_rate` | 6.75 | "The average distribution rate remained at 6.75%" |
 | `distribution_unit` | `percent_per_annum_on_subscription_price` | Defined as % of original investment |
 | `payout_ratio_percent` | 87 | "The payout ratio was 87% (2025: 96%)" |
 | `adjusted_operating_profit` | 5303580 | "Adjusted net profit 5,303,580" |
 | `adjusted_operating_profit_forecast` | **null** | Annual reports carry no forecast column |
-| `manager_fees` | Scheme management 0.42%, Property management 0.07% | **Percentages of scheme property, not dollars** |
+| `manager_fees` | Scheme management $490,703 / 0.42%; Property management $77,966 / 0.07%; Supervisor $24,136 / 0.02% | Given as **both** dollars and percent of scheme property |
+
+## Correction, 2026-09-11
+
+The first version of this table said `icr_covenant`, `swap_expiries` and the fee dollar
+amounts were absent. That was wrong. It was built from `pypdf` text output read through a
+truncated grep, and absence of evidence was recorded as evidence of absence — the same
+error the extraction prompt forbids. All three are present and the extractor found them.
+
+Anything recorded as **null** here should be verifiable by pointing at the document, not
+by failing to find it.
+
+## Material fact outside the schema
+
+**The facility was refinanced after balance date.** On 17 June 2026 the Scheme entered a
+facility with ASB Bank to refinance Westpac; effective 24 June 2026, three-year term
+expiring 23 June 2029, with the swaps novated across on unchanged terms (p18, p34).
+
+So `facility_expiry` of 2026-09-30 is correct *as at balance date* and simultaneously
+misleading about the present risk. The delta engine will flag a facility expiring six
+months out that has in fact already been refinanced for three years. Subsequent events
+need a home in the schema, or the flags will cry wolf on exactly the syndicates that have
+already dealt with the problem.
 
 ## Traps this document contains
 

@@ -36,7 +36,9 @@ def _minimal_payload(**overrides):
         "icr_actual": _null_figure(),
         "icr_covenant": _null_figure(),
         "swap_expiries": [],
+        "post_balance_date_facility_expiry": _null_figure(),
         "occupancy_percent": _null_figure(),
+        "vacancy_percent": _null_figure(),
         "wale_years": _null_figure(),
         "distribution_rate": _null_figure(),
         "distribution_unit": "unknown",
@@ -165,6 +167,28 @@ class TestDistributionAmbiguity:
             _minimal_payload(distribution_rate=_figure(7.0), distribution_unit="unknown")
         )
         assert report.distribution_unit.value == "unknown"
+
+
+class TestExpiryRisk:
+    """Augusta's facility expired 2026-09-30 but was refinanced to 2029-06-23."""
+
+    def test_vacancy_and_occupancy_are_separate_fields(self):
+        """0.24% vacancy must never be recorded as 0.24% occupancy."""
+        report = SyndicateReport.model_validate(
+            _minimal_payload(vacancy_percent=_figure(0.24))
+        )
+        assert report.vacancy_percent.value == 0.24
+        assert report.occupancy_percent.value is None
+
+    def test_post_balance_date_refinance_is_captured(self):
+        report = SyndicateReport.model_validate(
+            _minimal_payload(
+                facility_expiry=_figure("2026-09-30"),
+                post_balance_date_facility_expiry=_figure("2029-06-23"),
+            )
+        )
+        assert report.facility_expiry.value == "2026-09-30"
+        assert report.post_balance_date_facility_expiry.value == "2029-06-23"
 
 
 class TestCompleteness:
