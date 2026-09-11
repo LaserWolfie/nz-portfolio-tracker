@@ -164,12 +164,39 @@ backfill source for valuation and distribution history, but matching entities ac
 tabs is its own project. `Syndicate_Data` likewise stays untouched so existing dashboards
 keep working.
 
-### Phase 3 — Delta engine
-`modules/deltas.py`, **plain Python, no LLM.** Compares each new period row against the
-prior period and the baseline, emitting ranked flags with severity: distribution cut,
-ICR headroom thinning, facility or swap expiry inside 18 months, occupancy drop, a
-previously reported field now missing, manager fees up while distributions down. Unit
-tested with pytest.
+### Phase 3 — Delta engine ✅ done
+`modules/deltas.py`, **plain Python, no LLM** — every flag must be reproducible and
+explainable from two stored rows plus a baseline. `tests/test_deltas.py` covers it.
+
+`evaluate(current, prior, baseline, as_at)` runs ten rules and returns `Flag`s sorted
+most serious first. `review_all(period_rows, baseline_rows)` reviews the latest period of
+every syndicate and ranks them — that ranked list *is* the worklist.
+
+`Severity` is an `IntEnum` so flags sort naturally. It defines `__format__` because
+`IntEnum` otherwise inherits `int.__format__` and `f"{severity:<8}"` renders `3`.
+
+Two invariants the tests defend hardest:
+
+- **Blank is never zero.** An undisclosed figure comes back from Sheets as `''`. Read as
+  `0.0` it would report a distribution cut to nil, an LVR of zero and a covenant breach,
+  all from a manager who simply did not publish the number. `deltas._num()` returns
+  `None` for blanks. This module deliberately does **not** use `utils.clean_number`
+  (defaults to `0.0`) or `utils.clean_percent` (the ICR-destroying divide).
+- **Compare like with like.** A distribution rate on subscription price is not comparable
+  with one on closing equity. Where the basis changed, the engine emits
+  `distribution_basis_changed` instead of a fictional cut, and the fees-vs-distributions
+  rule declines to fire at all.
+
+`_rule_facility_expiry` reads `effective_facility_expiry`, so a facility already
+refinanced past balance date does not raise an alarm. Flagging Augusta's Westpac maturity
+when it had already been refinanced to ASB for three years would discredit the whole
+report.
+
+`_rule_disclosure_withdrawn` is the flag the required-and-nullable schema exists to
+enable: because every field is always present and explicitly null, "the manager stopped
+reporting this" is distinguishable from "the extractor missed it".
+
+Thresholds are module constants, not scattered literals.
 
 ### Phase 4 — Batch intake
 Upload a whole quarter at once, auto-match each PDF to a syndicate (filename + extracted
