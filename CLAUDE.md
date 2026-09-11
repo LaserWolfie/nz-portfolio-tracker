@@ -319,3 +319,38 @@ sold.
 Typos in `Syndicate_Data` are preserved as canonical ("Wholeale", "Heathcare", "Eskine &
 Owen" for Erskine & Owen) — it is the system of record, so aliases absorb the variance
 rather than the source being silently corrected.
+
+### Phase 4 — Batch intake ✅ done
+
+`modules/batch.py`, with a "📦 Batch Intake (Quarter)" tab on Property Forensics.
+`tests/test_batch.py` fakes extraction, so the wiring is tested without spending money.
+
+The flow is **plan → extract → review → save**:
+
+1. `plan_batch()` matches filenames to syndicates with **no API calls**, so a whole
+   quarter can be checked, and its cost seen, before anything is spent. Extraction is the
+   expensive step; matching is free.
+2. `run_batch()` extracts up to `MAX_CONCURRENT_DOCUMENTS` (3) at once — each document
+   already runs two concurrent passes, so that is six requests in flight.
+3. `save_batch()` writes only what is ready.
+
+Rules that matter:
+
+- **Per-file error isolation.** Every document is extracted inside its own try/except,
+  including a bare `except Exception`. One corrupt file must not sink the other
+  twenty-nine.
+- **The document outranks the filename.** A filename is a label someone typed; the entity
+  name inside the report is evidence. On disagreement the extracted name wins, the item
+  is marked `CONFLICT`, and it is **held back from saving** unless explicitly included.
+- **Sparse documents are held back too.** Discovered live: a real tax statement matched
+  its syndicate correctly and extracted 4 of 32 figures. Saved, it would have created a
+  near-empty period row, and next quarter the delta engine would have read every field it
+  omits as *disclosure withdrawn*. Below `SPARSE_THRESHOLD` (50%) an item is marked
+  `SPARSE` and needs explicit inclusion.
+
+`name_from_filename()` strips report words and **years only**. Stripping every digit made
+`Govt Income 1` and `Govt Income 2` indistinguishable, and lost the `33` in `33 Broadway`.
+`storage.LEGAL_SUFFIXES` also absorbs `LP`/`partnership`, so "Building B Graham Street LP"
+matches "Building B Graham Street Limited Partnership".
+
+Measured: two real documents, 22s wall clock, ~$1.60.

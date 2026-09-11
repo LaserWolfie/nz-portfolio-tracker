@@ -4,7 +4,7 @@ import plotly.express as px
 import altair as alt
 from datetime import datetime
 import os
-from modules import extraction, schema, sheets, storage, utils
+from modules import batch, extraction, schema, sheets, storage, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -74,7 +74,11 @@ scenario_label = f"{rate_adjustment:+.2f}% Rates" if rate_adjustment != 0 else "
 st.title("🏢 Property Forensics")
 
 # Create Tabs to separate View vs Input
-tab_dash, tab_upload = st.tabs(["📊 Portfolio Dashboard", "📄 Upload Report (AI Scanner)"])
+tab_dash, tab_upload, tab_batch = st.tabs([
+    "📊 Portfolio Dashboard",
+    "📄 Upload Report (AI Scanner)",
+    "📦 Batch Intake (Quarter)",
+])
 
 # ==========================================
 # TAB 1: FORENSIC DASHBOARD
@@ -347,3 +351,138 @@ with tab_upload:
                         st.error(f"Save failed: {e}")
                     else:
                         st.success(f"Saved ({status}).")
+
+# ==========================================
+# TAB 3: BATCH INTAKE
+# ==========================================
+with tab_batch:
+    st.header("📦 Batch Intake")
+    st.markdown(
+        "Upload a whole quarter's reports at once. Matching runs first and costs "
+        "nothing, so you can check the plan before spending anything on extraction."
+    )
+
+    if not have_credentials:
+        st.info("Set ANTHROPIC_API_KEY in secrets or the environment to run a batch.")
+    else:
+        uploads = st.file_uploader(
+            "Drop this quarter's PDFs here",
+            type=['pdf'],
+            accept_multiple_files=True,
+            key="batch_uploads",
+        )
+
+        if uploads:
+            try:
+                batch_spreadsheet = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
+                batch_baseline = storage.load_baseline(
+                    batch_spreadsheet.worksheet(storage.BASELINE_WORKSHEET)
+                )
+            except Exception as e:
+                st.error(f"Could not read {storage.BASELINE_WORKSHEET}: {e}")
+                batch_baseline, batch_spreadsheet = [], None
+
+            # --- Plan: free, no API calls ---
+            plan = batch.plan_batch([f.name for f in uploads], batch_baseline)
+            unmatched = [i for i in plan if i.status == batch.Status.UNMATCHED]
+
+            st.subheader("1. Match plan")
+            st.dataframe(
+                pd.DataFrame([{
+                    "File": i.filename,
+                    "Matched syndicate": i.syndicate_id or "— will use the document —",
+                } for i in plan]),
+                use_container_width=True, hide_index=True,
+            )
+            if unmatched:
+                st.warning(
+                    f"{len(unmatched)} file(s) did not match on filename. They will still "
+                    "be extracted — the entity name inside the document is authoritative "
+                    "and usually resolves them."
+                )
+            st.caption(
+                f"{len(plan)} document(s). Estimated extraction cost "
+                f"**~${batch.estimated_cost(plan):.2f}** at {extraction.DEFAULT_MODEL} rates. "
+                "Matching above was free."
+            )
+
+            st.subheader("2. Extract")
+            if st.button(f"🚀 Extract {len(plan)} document(s)", type="primary"):
+                progress = st.progress(0.0, text="Starting…")
+                documents = {f.name: f.read() for f in uploads}
+
+                def _tick(done, total, item):
+                    progress.progress(done / total, text=f"{done}/{total} — {item.filename}")
+
+                results = batch.run_batch(
+                    documents, batch_baseline,
+                    api_key=api_key, model=extraction.DEFAULT_MODEL, on_progress=_tick,
+                )
+                progress.empty()
+                st.session_state['batch_results'] = results
+
+        results = st.session_state.get('batch_results')
+        if results:
+            st.subheader("3. Results")
+            counts = batch.summarise(results)
+            st.write(" · ".join(f"**{n}** {status}" for status, n in sorted(counts.items())))
+
+            st.dataframe(
+                pd.DataFrame([{
+                    "File": i.filename,
+                    "Status": i.status,
+                    "Syndicate": i.syndicate_id or "",
+                    "Period": i.period_end or "",
+                    "Found": f"{i.completeness[0]}/{i.completeness[1]}" if i.completeness else "",
+                    "Note": (i.error or " ".join(i.notes))[:140],
+                } for i in results]),
+                use_container_width=True, hide_index=True,
+            )
+
+            attention = [i for i in results if i.needs_attention]
+            if attention:
+                st.warning(f"{len(attention)} document(s) need a decision before saving.")
+                for i in attention:
+                    with st.expander(f"{i.status.upper()} — {i.filename}"):
+                        if i.error:
+                            st.error(i.error)
+                        for note in i.notes:
+                            st.write(f"• {note}")
+
+            ready = [i for i in results
+                     if i.report and i.syndicate_id and i.period_end
+                     and i.status == batch.Status.EXTRACTED]
+            conflicts = [i for i in results if i.status == batch.Status.CONFLICT]
+            sparse = [i for i in results if i.status == batch.Status.SPARSE]
+
+            st.subheader("4. Save")
+            include = False
+            include_sparse = False
+            if conflicts:
+                include = st.checkbox(
+                    f"Also save {len(conflicts)} conflicted document(s), filing each under "
+                    "the syndicate named inside the document",
+                    value=False,
+                )
+            if sparse:
+                include_sparse = st.checkbox(
+                    f"Also save {len(sparse)} sparse document(s) — usually tax statements "
+                    "or valuation letters rather than full reports. Saving one makes the "
+                    "fields it omits look withdrawn next quarter.",
+                    value=False,
+                )
+            total_to_save = (len(ready) + (len(conflicts) if include else 0)
+                             + (len(sparse) if include_sparse else 0))
+            st.caption(
+                f"{total_to_save} row(s) will be written to {storage.PERIODS_WORKSHEET}. "
+                "Re-saving a period overwrites that row rather than adding one."
+            )
+            if total_to_save and st.button(f"💾 Save {total_to_save} row(s)"):
+                batch.save_batch(
+                    results, spreadsheet=batch_spreadsheet,
+                    model=extraction.DEFAULT_MODEL, include_conflicts=include,
+                    include_sparse=include_sparse,
+                )
+                saved = sum(1 for i in results if i.status == batch.Status.SAVED)
+                st.success(f"Saved {saved} row(s).")
+                st.session_state['batch_results'] = results

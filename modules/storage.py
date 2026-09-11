@@ -205,6 +205,10 @@ def flatten_report(
 # Syndicate identity
 # --------------------------------------------------------------------------
 
+#: Legal forms that vary freely between documents for the same entity.
+LEGAL_SUFFIXES = {"limited", "ltd", "the", "lp", "partnership", "l.p"}
+
+
 def _normalise(name: str) -> str:
     """Loose comparison key: case, punctuation and legal suffixes vary by document."""
     if not name:
@@ -212,7 +216,7 @@ def _normalise(name: str) -> str:
     text = str(name).lower()
     for noise in (",", ".", "(", ")", "'", "’", "-", "  "):
         text = text.replace(noise, " ")
-    words = [w for w in text.split() if w not in {"limited", "ltd", "the"}]
+    words = [w for w in text.split() if w not in LEGAL_SUFFIXES]
     return " ".join(words)
 
 
