@@ -41,11 +41,17 @@ class ExtractionError(Exception):
 
 def extract_report(
     pdf_bytes: bytes,
-    api_key: str,
+    api_key: str | None = None,
     syndicate_name: str | None = None,
     model: str = DEFAULT_MODEL,
 ) -> SyndicateReport:
     """Extract one investor report PDF into the fixed schema.
+
+    `api_key` is optional. When it is omitted the SDK resolves credentials
+    itself, in order: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, an `ant auth
+    login` OAuth profile, then Workload Identity Federation. That keeps the
+    Streamlit Cloud path (a key in secrets) and a local keyless path working
+    from the same code.
 
     `syndicate_name` is the syndicate we believe this document belongs to, used
     only to let the model flag a mismatch -- it never overrides the document.
@@ -53,7 +59,11 @@ def extract_report(
     Raises ExtractionError with a readable message; the caller decides whether
     one bad document should stop a batch.
     """
-    client = anthropic.Anthropic(api_key=api_key, timeout=REQUEST_TIMEOUT_SECONDS)
+    client = (
+        anthropic.Anthropic(api_key=api_key, timeout=REQUEST_TIMEOUT_SECONDS)
+        if api_key
+        else anthropic.Anthropic(timeout=REQUEST_TIMEOUT_SECONDS)
+    )
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
     try:

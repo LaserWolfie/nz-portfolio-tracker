@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
+import os
 from modules import extraction, sheets, utils
 
 # --- CONFIGURATION ---
@@ -255,11 +256,18 @@ with tab_upload:
     st.header("📄 PDF Report Scanner")
     st.markdown("Upload an Annual Report PDF. Claude will extract the forensic data for you.")
 
+    # A key is optional: without one the SDK falls back to ANTHROPIC_API_KEY in the
+    # environment, an `ant auth login` profile, or Workload Identity Federation.
     if "ANTHROPIC_API_KEY" in st.secrets:
         api_key = st.secrets["ANTHROPIC_API_KEY"]
-        st.success("🔑 API Key loaded from secrets")
+        st.success("🔑 API key loaded from secrets")
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        api_key = None
+        st.success("🔑 Using credentials from the environment")
     else:
-        api_key = st.text_input("Enter Anthropic API Key:", type="password")
+        api_key = st.text_input("Enter Anthropic API Key:", type="password") or None
+        if not api_key:
+            st.info("No key found. Enter one above, or set ANTHROPIC_API_KEY in the environment.")
 
     uploaded_file = st.file_uploader("Drag & Drop Report Here", type=['pdf'])
     expected_name = st.text_input(
@@ -268,7 +276,8 @@ with tab_upload:
              "syndicate. It never overrides what the document says.",
     )
 
-    if uploaded_file and api_key:
+    have_credentials = bool(api_key) or bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if uploaded_file and have_credentials:
         if st.button("🚀 Scan Document", type="primary"):
             with st.spinner("🤖 Claude is reading the report..."):
                 try:
