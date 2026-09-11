@@ -1,0 +1,161 @@
+{
+  "entity_name": {
+    "value": "Augusta St Georges Bay Road Property Trust",
+    "page": 4,
+    "source_text": "Name of the Scheme: Augusta St Georges Bay Road Property Trust"
+  },
+  "manager_name": {
+    "value": "Centuria Funds Management (NZ) Limited",
+    "page": 4,
+    "source_text": "Name of the Manager: Centuria Funds Management (NZ) Limited"
+  },
+  "period_end_date": {
+    "value": "2026-03-31",
+    "page": 14,
+    "source_text": "Statement of comprehensive income\nFor the year ended 31 March 2026"
+  },
+  "report_type": {
+    "value": "Annual Report",
+    "page": 1,
+    "source_text": "ANNUAL REPORT\nAUGUSTA ST GEORGES BAY ROAD PROPERTY TRUST"
+  },
+  "valuation": {
+    "value": 115000000.0,
+    "page": 25,
+    "source_text": "Amount of valuation 115,000,000"
+  },
+  "valuation_date": {
+    "value": "2026-03-31",
+    "page": 24,
+    "source_text": "It was valued as at 31 March 2026 by an external, independent property valuer"
+  },
+  "nta_per_unit": {
+    "value": 45431.0,
+    "page": 5,
+    "source_text": "Net assets per unit 45,431"
+  },
+  "cash": {
+    "value": 1953096.0,
+    "page": 16,
+    "source_text": "Cash and cash equivalents 8 1,138,212 ... 1,953,096"
+  },
+  "total_debt": {
+    "value": 53500000.0,
+    "page": 28,
+    "source_text": "Loan balance 53,500,000"
+  },
+  "facility_expiry": {
+    "value": "2026-09-30",
+    "page": 28,
+    "source_text": "Loan maturity date 30/09/2026"
+  },
+  "lvr_percent": {
+    "value": 46.52,
+    "page": 3,
+    "source_text": "46.52%\nAverage distribution rate ⁴"
+  },
+  "icr_actual": {
+    "value": null,
+    "page": null,
+    "source_text": null
+  },
+  "icr_covenant": {
+    "value": 2.0,
+    "page": 28,
+    "source_text": "The interest cover ratio requires that net rentals are no less than 2.0 times the interest expense on the secured borrowings at all times."
+  },
+  "swap_expiries": [
+    {
+      "expiry_date": "2026-06-08",
+      "notional_amount": 13375000.0,
+      "fixed_rate_percent": 4.89,
+      "page": 29
+    },
+    {
+      "expiry_date": "2026-06-05",
+      "notional_amount": 13375000.0,
+      "fixed_rate_percent": 4.18,
+      "page": 29
+    },
+    {
+      "expiry_date": "2027-06-08",
+      "notional_amount": 26750000.0,
+      "fixed_rate_percent": 3.43,
+      "page": 29
+    },
+    {
+      "expiry_date": "2028-06-06",
+      "notional_amount": 13375000.0,
+      "fixed_rate_percent": 3.43,
+      "page": 29
+    }
+  ],
+  "post_balance_date_facility_expiry": {
+    "value": "2029-06-23",
+    "page": 35,
+    "source_text": "The facility became effective on 24 June 2026, with a term of three years expiring on 23 June 2029."
+  },
+  "occupancy_percent": {
+    "value": null,
+    "page": null,
+    "source_text": null
+  },
+  "vacancy_percent": {
+    "value": 0.24,
+    "page": 25,
+    "source_text": "Vacancy rate 0.24%"
+  },
+  "wale_years": {
+    "value": 3.35,
+    "page": 3,
+    "source_text": "3.35 years\nWALE ³"
+  },
+  "distribution_rate": {
+    "value": 6.75,
+    "page": 8,
+    "source_text": "Average distribution rate 3 (% on original investment) 6.75%"
+  },
+  "distribution_unit": "percent_per_annum_on_subscription_price",
+  "payout_ratio_percent": {
+    "value": 87.0,
+    "page": 8,
+    "source_text": "Payout ratio 5 87%"
+  },
+  "adjusted_operating_profit": {
+    "value": 5303580.0,
+    "page": 8,
+    "source_text": "Adjusted net profit 5,303,580"
+  },
+  "adjusted_operating_profit_forecast": {
+    "value": null,
+    "page": null,
+    "source_text": null
+  },
+  "manager_fees": [
+    {
+      "category": "Scheme management fees",
+      "amount": 490703.0,
+      "percent_of_scheme_property": 0.42,
+      "page": 10
+    },
+    {
+      "category": "Property management fees",
+      "amount": 77966.0,
+      "percent_of_scheme_property": 0.07,
+      "page": 10
+    },
+    {
+      "category": "Total fees and expenses charged by the manager",
+      "amount": 568669.0,
+      "percent_of_scheme_property": 0.49,
+      "page": 10
+    },
+    {
+      "category": "Supervisor fees",
+      "amount": 24136.0,
+      "percent_of_scheme_property": 0.02,
+      "page": 10
+    }
+  ],
+  "extraction_notes": "Rounding/precision differences: the Manager's letter (page 2) states \"an LVR of 47%\" and a weighted average lease term of \"3.4 years\", whereas the key information summary (page 3) and Note 5 valuation summary (page 25) give 46.52% and 3.35 years respectively - the more precise figures were recorded. Key information tiles round valuation to $115.0M, loan to $53.5M and net assets per unit to $45K; precise figures taken from the financial statements/financial analysis. No interest coverage ratio actual is disclosed - only the covenant (net rentals no less than 2.0 times interest expense, Note 6; the post-balance-date ASB facility covenant is expressed as EBITDA no less than 2.0 times interest expense, Note 17). 'adjusted_operating_profit' has been taken from the report's line labelled \"Adjusted net profit\" ($5,303,580) in the non-GAAP reconciliation - the report does not use the term \"adjusted operating profit\"; note also \"Operating profit\" per the statement of comprehensive income is $4,899,875 and \"Cash surplus available\" is $5,267,177. No forecast figures are presented. Occupancy is not stated as a percentage; Note 5 states the property is \"fully leased at balance date\" while the valuation summary shows a vacancy rate of 0.24%. Borrowings were reclassified from non-current to current at 31 March 2026 reflecting the Westpac facility maturity on 30 September 2026; the facility was refinanced with ASB on 24 June 2026 (post balance date) with swaps novated on unchanged terms."
+}

@@ -218,12 +218,15 @@ class SyndicateReport(BaseModel):
 
     # --- Earnings ----------------------------------------------------------------
     adjusted_operating_profit: Figure = Field(
-        description="Adjusted operating profit (AOP) for the period, in dollars. Managers "
-        "label this differently: 'adjusted net profit', 'distributable profit' and "
-        "'adjusted funds from operations' are the same concept, and it is the figure "
-        "arrived at after adjusting net profit for fair value movements and other non-cash "
-        "items. It is NOT the same as 'operating profit' or 'net profit' -- if only those "
-        "are given and no adjusted figure is reconciled, record null."
+        description="The report's headline ADJUSTED earnings figure for the period, in "
+        "dollars: the figure a non-GAAP reconciliation arrives at after removing fair "
+        "value movements and other non-cash items from net profit. Managers label it "
+        "differently and every one of these IS this field: 'adjusted operating profit', "
+        "'adjusted net profit', 'distributable profit', 'adjusted funds from operations'. "
+        "Record the reconciliation's result under whatever name it carries. Only the "
+        "unadjusted GAAP subtotals -- the plain 'Operating profit' and 'Net profit' lines "
+        "that the reconciliation starts from -- are excluded. Record null only when the "
+        "report contains no such reconciliation at all."
     )
     adjusted_operating_profit_forecast: Figure = Field(
         description="The forecast or budgeted AOP for the same period, in dollars, where "

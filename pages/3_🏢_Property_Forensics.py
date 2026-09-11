@@ -4,7 +4,7 @@ import plotly.express as px
 import altair as alt
 from datetime import datetime
 import os
-from modules import extraction, sheets, utils
+from modules import extraction, sheets, storage, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -23,51 +23,6 @@ def clean_number(x):
 
 def clean_percent(x):
     return utils.clean_percent(x)
-
-def save_to_google_sheet(data_dict):
-    """Writes the extracted data to the Google Sheet with EXACT column mapping."""
-    try:
-        sheet = sheets.open_property_worksheet()
-
-        # --- DYNAMIC ROW MAPPING (Fixed to prevent $0 values) ---
-        row = [
-            data_dict.get('Entity_Name', ''),           # A
-            data_dict.get('Owner_Entity', 'Other'),     # B
-            data_dict.get('Manager', 'Unknown'),        # C
-            data_dict.get('Original_Value', 0),         # D: Fixed (Retrieves from AI)
-            data_dict.get('Current_Value', 0),          # E
-            data_dict.get('Original_Distribution', 0),  # F: Fixed (Retrieves from AI)
-            data_dict.get('Annual_Distribution', 0),    # G
-            data_dict.get('LVR_Percent', 0),            # H
-            data_dict.get('WALT_Years', 0),             # I
-            data_dict.get('Vacancy_Percent', 0),        # J
-            "",                                         # K
-            "",                                         # L
-            "",                                         # M
-            data_dict.get('Distribution_At_Risk', 'No'),# N
-            data_dict.get('Capital_Raise', 0),          # O
-            data_dict.get('Capex_Planned', 0),          # P
-            data_dict.get('Expense_Ratio', 0),          # Q
-            data_dict.get('Debt_Yield', 0),             # R
-            data_dict.get('CapEx_Reserves', 0),         # S
-            data_dict.get('Loan_Expiry_Year', ''),      # T
-            data_dict.get('Sector', 'Other'),           # U
-            data_dict.get('Interest_Cover', 0)          # V
-        ]
-        
-        # --- SAFETY SAVE ---
-        try:
-            sheet.append_row(row)
-            return True
-        except Exception as e:
-            # If Google sends a "200 OK" but the old library thinks it's an error
-            if "200" in str(e):
-                return True
-            raise
-
-    except Exception as e:
-        st.error(f"Save Error: {e}")
-        return False
 
 # --- DATA LOADING ---
 if 'prop_df' not in st.session_state or st.session_state.prop_df.empty:
@@ -338,7 +293,58 @@ with tab_upload:
         if report.extraction_notes:
             st.info(f"**Extraction notes:** {report.extraction_notes}")
 
-        st.warning(
-            "Saving is wired up in Phase 2, once the per-period storage tabs exist. "
-            "Nothing is written to the sheet yet."
-        )
+        # --- SAVE TO Syndicate_Periods -------------------------------------
+        st.markdown("##### Save")
+        if not report.period_end_date.value:
+            st.error(
+                "No period end date was found, so this report cannot be filed against a "
+                "period. Check the document before saving."
+            )
+        else:
+            try:
+                spreadsheet = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
+                baseline_ws = spreadsheet.worksheet(storage.BASELINE_WORKSHEET)
+                baseline_rows = storage.load_baseline(baseline_ws)
+            except Exception as e:
+                st.error(f"Could not read {storage.BASELINE_WORKSHEET}: {e}")
+                baseline_rows = []
+                spreadsheet = None
+
+            known_ids = [str(r.get('syndicate_id')) for r in baseline_rows if r.get('syndicate_id')]
+            matched = storage.resolve_syndicate_id(report.entity_name.value, baseline_rows)
+
+            if matched:
+                st.success(f"Matched to syndicate **{matched}**")
+                syndicate_id = matched
+            elif known_ids:
+                st.warning(
+                    f"Could not match “{report.entity_name.value}” to a known syndicate. "
+                    "Pick one, or add an alias in Syndicate_Baseline."
+                )
+                syndicate_id = st.selectbox("File under syndicate", known_ids)
+            else:
+                st.info(
+                    f"{storage.BASELINE_WORKSHEET} is empty. Add a row there first so "
+                    "reports can be filed against a stable syndicate id."
+                )
+                syndicate_id = None
+
+            if syndicate_id and spreadsheet is not None:
+                st.caption(
+                    f"Saves to **{storage.PERIODS_WORKSHEET}** as "
+                    f"`{syndicate_id}` / `{report.period_end_date.value}`. "
+                    "Re-saving the same period overwrites that row rather than adding one."
+                )
+                if st.button("💾 Save to sheet", type="primary"):
+                    try:
+                        status = storage.save_report(
+                            report,
+                            syndicate_id=syndicate_id,
+                            source_filename=getattr(uploaded_file, 'name', ''),
+                            model=extraction.DEFAULT_MODEL,
+                            spreadsheet=spreadsheet,
+                        )
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+                    else:
+                        st.success(f"Saved ({status}).")

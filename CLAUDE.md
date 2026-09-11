@@ -57,10 +57,10 @@ Bryn's holdings from the parents'.
   it will silently destroy any ratio that legitimately exceeds 2 — an ICR of `2.5x`
   becomes `0.025`, a WALE of `4.2` years becomes `0.042`. Never route ICR, WALE, or
   payout-ratio values through it.
-- `save_to_google_sheet` appends **positionally** — the 22-element list must stay aligned
-  with the sheet's column order. Inserting a column in the sheet silently corrupts writes.
-  Phase 2 replaces this with header-name writes.
-- `test_connection.py` is empty. There are no tests.
+- **Never append positionally.** The old `save_to_google_sheet` built a 22-element list
+  and appended it by position, so inserting a column shifted every value into the wrong
+  field. It was dead code and has been removed; use `storage.row_from_dict()`.
+- `test_connection.py` is empty (the real tests live in `tests/`).
 - Four virtualenvs exist. **`.venvapp` is the live one** (anthropic 0.115.0, pydantic
   2.13.4, streamlit 1.52.2). `.venv`, `.venv312`, and `venv` are stale or broken and
   still carry the old `google-generativeai` dependency from the pre-Claude scanner.
@@ -76,10 +76,20 @@ pre-extract to text. Layout is meaning in these reports: figures sit in tables u
 "Current / Prior / Forecast" headings, and flattening is what makes a model take the
 wrong column.
 
-**Still outstanding (Phase 2):** `save_to_google_sheet()` writes the *old* flat shape and
-is still never called, so extractions remain unpersisted. The review pane says so
-explicitly rather than implying a save happened. The prior-period row and IM baseline are
-likewise not yet passed anywhere, because there is nowhere to read them from yet.
+Extractions are reviewed figure-by-figure with page and quote, then saved to
+`Syndicate_Periods` under a resolved `syndicate_id`.
+
+**Validated against a real document.** The Augusta St Georges Bay Road FY2026 annual
+report (44pp) extracts 18/18 fields correctly in ~45s for roughly $0.40. Ground truth and
+the traps that document contains are in `tests/fixtures/augusta_fy2026_ground_truth.md`;
+the extraction itself is checked in as `augusta_fy2026_extracted.json` and used as a test
+fixture, so flattening is exercised against real output.
+
+**Field descriptions must not contradict themselves.** An earlier `adjusted_operating_profit`
+description listed "adjusted net profit" as a synonym while also saying the field is not
+"net profit". Two runs of the same document resolved that conflict differently — one
+returned the figure, one returned null. Wording ambiguity shows up as run-to-run variance,
+so treat a flapping field as a prompt bug, not model noise.
 
 ## Planned work: quarterly report pipeline
 
@@ -113,14 +123,46 @@ everything opens by key.
 **Units are pinned in the schema**: percentages whole (45.0 = 45%), ratios as multiples
 (2.5 = 2.5x), WALE in years. Tests guard the ICR case specifically.
 
-### Phase 2 — Storage
-Two new tabs, written **by header name** rather than by position:
-- `Syndicate_Periods` — one row per syndicate per period end.
-- `Syndicate_Baseline` — one row per syndicate, from the IM: forecast distribution,
-  formation NAV, covenant definitions, trust-deed thresholds.
+### Phase 2 — Storage ✅ done
+`modules/storage.py`. Both tabs exist in the property spreadsheet and are written **by
+header name**; `tests/test_storage.py` covers the contract with a faked worksheet.
 
-Introduce a stable `syndicate_id` plus an alias list, since `Entity_Name` varies between
-documents. Leave `Syndicate_Data` in place so the existing dashboards keep working.
+- `Syndicate_Periods` — one row per syndicate per period end, 59 columns.
+- `Syndicate_Baseline` — one row per syndicate: `syndicate_id`, canonical name, aliases,
+  and the IM-derived reference figures.
+
+Key properties:
+
+- **The period columns are derived from `SyndicateReport`**, so adding a schema field
+  extends the sheet instead of silently dropping the new data. `ensure_worksheets()` adds
+  missing headers and never reorders or removes existing ones.
+- `row_from_dict()` orders values by header text and **raises on an unknown key**. A
+  column inserted by hand shifts nothing; a schema field with no column is an error, not
+  a silent drop.
+- Writes are an **upsert on `(syndicate_id, period_end)`** — re-scanning a document
+  overwrites that period rather than creating a second, conflicting history.
+- Nulls are written as empty cells, never `0`. "Not disclosed" must not read back as a
+  real zero.
+- `effective_facility_expiry` prefers `post_balance_date_facility_expiry` where present,
+  so a facility already refinanced does not trigger the expiry flag.
+- Repeating groups (swaps, fees) are summarised into the few columns the delta engine
+  needs; the full structure is preserved verbatim in `raw_json` (~4.7KB, well inside the
+  50,000-character cell limit).
+
+`resolve_syndicate_id()` matches a reported entity name against canonical names and
+aliases, ignoring case, punctuation and legal suffixes, then falls back to containment.
+**It returns `None` rather than guessing** when the match is ambiguous — filing a report
+against the wrong syndicate corrupts two histories at once. The UI asks in that case.
+
+### Pre-existing quarterly tabs
+
+The property spreadsheet already holds ~15 quarterly tabs (`Q1 2021` … `Q3 2026`) with a
+different shape: Tenant, Location, Manager, Owner, Original/Current Value, Annual $,
+Annual Return. These are holding snapshots, not covenant forensics — no LVR, ICR, WALE or
+facility expiry. They are **not** read or written by the pipeline. They are a candidate
+backfill source for valuation and distribution history, but matching entities across 15
+tabs is its own project. `Syndicate_Data` likewise stays untouched so existing dashboards
+keep working.
 
 ### Phase 3 — Delta engine
 `modules/deltas.py`, **plain Python, no LLM.** Compares each new period row against the
