@@ -107,7 +107,7 @@ class TestFlatten:
         assert row["swap_count"] == 4
         assert row["earliest_swap_expiry"] == "2026-06-05"
         assert row["total_swap_notional"] == pytest.approx(66_875_000)
-        assert len(json.loads(row["raw_json"])["swap_expiries"]) == 4
+        assert len(json.loads(row["raw_json"])["debt"]["swap_expiries"]) == 4
 
     def test_fees_total_both_bases(self, augusta):
         row = flatten_report(augusta, syndicate_id="SGB")

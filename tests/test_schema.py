@@ -20,54 +20,68 @@ def _figure(value, page=1, quote="quoted"):
 
 
 def _minimal_payload(**overrides):
-    """A fully-null report -- the shape the model must return for an unreadable PDF."""
-    payload = {
-        "entity_name": _null_figure(),
-        "manager_name": _null_figure(),
-        "period_end_date": _null_figure(),
-        "report_type": _null_figure(),
-        "valuation": _null_figure(),
-        "valuation_date": _null_figure(),
-        "nta_per_unit": _null_figure(),
-        "cash": _null_figure(),
-        "total_debt": _null_figure(),
-        "facility_expiry": _null_figure(),
-        "lvr_percent": _null_figure(),
-        "icr_actual": _null_figure(),
-        "icr_covenant": _null_figure(),
-        "swap_expiries": [],
-        "post_balance_date_facility_expiry": _null_figure(),
-        "occupancy_percent": _null_figure(),
-        "vacancy_percent": _null_figure(),
-        "wale_years": _null_figure(),
-        "distribution_rate": _null_figure(),
-        "distribution_unit": "unknown",
-        "payout_ratio_percent": _null_figure(),
-        "adjusted_operating_profit": _null_figure(),
-        "adjusted_operating_profit_forecast": _null_figure(),
-        "manager_fees": [],
-        "extraction_notes": None,
+    """A fully-null report -- the shape the model must return for an unreadable PDF.
+
+    Grouped to match the schema. `overrides` are keyed by LEAF name and routed
+    to the right group, so tests stay readable and do not encode the grouping.
+    """
+    groups = {
+        "identity": ["entity_name", "manager_name", "period_end_date", "report_type"],
+        "valuation": ["valuation", "valuation_date", "nta_per_unit", "cash",
+                      "capitalisation_rate_percent", "discount_rate_percent",
+                      "terminal_yield_percent"],
+        "debt": ["total_debt", "facility_expiry", "post_balance_date_facility_expiry",
+                 "lvr_percent", "icr_actual", "icr_covenant"],
+        "tenancy": ["occupancy_percent", "vacancy_percent", "wale_years",
+                    "net_market_rent_per_sqm", "net_passing_rent_per_sqm",
+                    "net_lettable_area_sqm", "nbs_rating_percent"],
+        "returns": ["distribution_rate", "payout_ratio_percent",
+                    "adjusted_operating_profit", "adjusted_operating_profit_forecast"],
+        "conduct": ["management_fee_escalation_basis", "capex_spent",
+                    "lease_incentives_paid", "related_party_transactions"],
     }
-    payload.update(overrides)
+    payload = {g: {f: _null_figure() for f in fields} for g, fields in groups.items()}
+    payload["debt"]["swap_expiries"] = []
+    payload["returns"]["distribution_unit"] = "unknown"
+    payload["conduct"]["manager_fees"] = []
+    payload["extraction_notes"] = None
+
+    where = {f: g for g, fields in groups.items() for f in fields}
+    where.update({"swap_expiries": "debt", "distribution_unit": "returns",
+                  "manager_fees": "conduct"})
+    for key, value in overrides.items():
+        if key == "extraction_notes":
+            payload[key] = value
+        else:
+            payload[where[key]][key] = value
     return payload
 
 
 class TestSchemaContract:
     def test_every_field_is_required_in_json_schema(self):
-        """No field may be optional, so the model cannot silently omit one."""
+        """No field may be optional, anywhere, so none can be silently omitted."""
         schema = SyndicateReport.model_json_schema()
-        assert sorted(schema["properties"]) == sorted(schema["required"])
+        objects = [schema] + [d for d in schema.get("$defs", {}).values()
+                              if d.get("type") == "object"]
+        for obj in objects:
+            assert sorted(obj["properties"]) == sorted(obj.get("required", [])), obj.get("title")
+
+    def test_top_level_stays_small_enough_to_compile(self):
+        """The structured-output grammar is rejected above roughly a dozen
+        top-level properties; keep new fields inside a group."""
+        schema = SyndicateReport.model_json_schema()
+        assert len(schema["properties"]) <= 10
 
     def test_every_figure_field_accepts_null(self):
         """'Not disclosed' must be expressible for every figure."""
         report = SyndicateReport.model_validate(_minimal_payload())
-        assert report.valuation.value is None
-        assert report.icr_covenant.value is None
+        assert report.valuation.valuation.value is None
+        assert report.debt.icr_covenant.value is None
 
     def test_omitting_a_field_is_rejected(self):
         """An omitted key is an error, not an implicit null."""
         payload = _minimal_payload()
-        del payload["lvr_percent"]
+        del payload["debt"]["lvr_percent"]
         with pytest.raises(ValidationError):
             SyndicateReport.model_validate(payload)
 
@@ -76,8 +90,8 @@ class TestSchemaContract:
         report = SyndicateReport.model_validate(
             _minimal_payload(cash=_figure(0.0))
         )
-        assert report.cash.value == 0.0
-        assert report.cash.value is not None
+        assert report.valuation.cash.value == 0.0
+        assert report.valuation.cash.value is not None
 
 
 class TestUnits:
@@ -86,19 +100,19 @@ class TestUnits:
         report = SyndicateReport.model_validate(
             _minimal_payload(icr_actual=_figure(2.5), icr_covenant=_figure(1.75))
         )
-        assert report.icr_actual.value == 2.5
-        assert report.icr_covenant.value == 1.75
+        assert report.debt.icr_actual.value == 2.5
+        assert report.debt.icr_covenant.value == 1.75
 
     def test_wale_stays_in_years(self):
         report = SyndicateReport.model_validate(_minimal_payload(wale_years=_figure(4.2)))
-        assert report.wale_years.value == 4.2
+        assert report.tenancy.wale_years.value == 4.2
 
     def test_percentages_are_whole_numbers(self):
         report = SyndicateReport.model_validate(
             _minimal_payload(lvr_percent=_figure(42.5), occupancy_percent=_figure(97.5))
         )
-        assert report.lvr_percent.value == 42.5
-        assert report.occupancy_percent.value == 97.5
+        assert report.debt.lvr_percent.value == 42.5
+        assert report.tenancy.occupancy_percent.value == 97.5
 
 
 class TestProvenance:
@@ -124,7 +138,7 @@ class TestManagerFees:
                 ]
             )
         )
-        fee = report.manager_fees[0]
+        fee = report.conduct.manager_fees[0]
         assert fee.percent_of_scheme_property == 0.42
         assert fee.amount is None, "a percentage must not be coerced into a dollar amount"
 
@@ -141,11 +155,11 @@ class TestManagerFees:
                 ]
             )
         )
-        assert report.manager_fees[0].amount == 12400.0
+        assert report.conduct.manager_fees[0].amount == 12400.0
 
     def test_no_fees_disclosed_is_an_empty_list(self):
         report = SyndicateReport.model_validate(_minimal_payload())
-        assert report.manager_fees == []
+        assert report.conduct.manager_fees == []
 
 
 class TestDistributionAmbiguity:
@@ -158,15 +172,15 @@ class TestDistributionAmbiguity:
                 distribution_unit="percent_per_annum_on_subscription_price",
             )
         )
-        assert report.distribution_rate.value == 6.75
-        assert report.distribution_unit.value == "percent_per_annum_on_subscription_price"
+        assert report.returns.distribution_rate.value == 6.75
+        assert report.returns.distribution_unit.value == "percent_per_annum_on_subscription_price"
 
     def test_unknown_basis_is_expressible(self):
         """Better an explicit 'unknown' than a guessed basis."""
         report = SyndicateReport.model_validate(
             _minimal_payload(distribution_rate=_figure(7.0), distribution_unit="unknown")
         )
-        assert report.distribution_unit.value == "unknown"
+        assert report.returns.distribution_unit.value == "unknown"
 
 
 class TestExpiryRisk:
@@ -177,8 +191,8 @@ class TestExpiryRisk:
         report = SyndicateReport.model_validate(
             _minimal_payload(vacancy_percent=_figure(0.24))
         )
-        assert report.vacancy_percent.value == 0.24
-        assert report.occupancy_percent.value is None
+        assert report.tenancy.vacancy_percent.value == 0.24
+        assert report.tenancy.occupancy_percent.value is None
 
     def test_post_balance_date_refinance_is_captured(self):
         report = SyndicateReport.model_validate(
@@ -187,8 +201,8 @@ class TestExpiryRisk:
                 post_balance_date_facility_expiry=_figure("2029-06-23"),
             )
         )
-        assert report.facility_expiry.value == "2026-09-30"
-        assert report.post_balance_date_facility_expiry.value == "2029-06-23"
+        assert report.debt.facility_expiry.value == "2026-09-30"
+        assert report.debt.post_balance_date_facility_expiry.value == "2029-06-23"
 
 
 class TestCompleteness:

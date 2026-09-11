@@ -10,16 +10,21 @@ what makes a model take the wrong column.
 """
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 
 from modules.schema import (
     EXTRACTION_SYSTEM_PROMPT,
+    AssetPass,
     DateFigure,
     Figure,
+    FinancialPass,
     SyndicateReport,
     TextFigure,
     build_extraction_prompt,
+    iter_figures,
+    merge_passes,
 )
 
 #: The wrapper types that represent one extracted value with provenance.
@@ -66,6 +71,25 @@ def extract_report(
     )
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
+    # The two passes are independent, so run them concurrently: two requests
+    # cost twice as much but take about as long as one.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {
+            name: pool.submit(
+                _run_pass, client, model, pdf_b64, output_format, syndicate_name, name
+            )
+            for name, output_format in (
+                ("financial", FinancialPass),
+                ("asset", AssetPass),
+            )
+        }
+        results = {name: future.result() for name, future in futures.items()}
+
+    return merge_passes(results["financial"], results["asset"])
+
+
+def _run_pass(client, model, pdf_b64, output_format, syndicate_name, focus):
+    """One extraction pass over the whole document."""
     try:
         response = client.messages.parse(
             model=model,
@@ -73,7 +97,7 @@ def extract_report(
             system=EXTRACTION_SYSTEM_PROMPT,
             thinking={"type": "adaptive"},
             output_config={"effort": "high"},
-            output_format=SyndicateReport,
+            output_format=output_format,
             messages=[
                 {
                     "role": "user",
@@ -88,35 +112,35 @@ def extract_report(
                         },
                         {
                             "type": "text",
-                            "text": build_extraction_prompt(syndicate_name),
+                            "text": build_extraction_prompt(syndicate_name, focus),
                         },
                     ],
                 }
             ],
         )
     except anthropic.BadRequestError as e:
-        raise ExtractionError(f"Request rejected: {e.message}") from e
+        raise ExtractionError(f"Request rejected ({focus} pass): {e.message}") from e
     except anthropic.AuthenticationError as e:
         raise ExtractionError("Anthropic API key is invalid or missing.") from e
     except anthropic.RateLimitError as e:
         raise ExtractionError("Rate limited by the Anthropic API; retry shortly.") from e
     except anthropic.APIStatusError as e:
-        raise ExtractionError(f"API error {e.status_code}: {e.message}") from e
+        raise ExtractionError(f"API error {e.status_code} ({focus} pass): {e.message}") from e
     except anthropic.APIConnectionError as e:
         raise ExtractionError("Could not reach the Anthropic API; check the network.") from e
 
     if response.stop_reason == "refusal":
-        raise ExtractionError("The model declined to process this document.")
+        raise ExtractionError(f"The model declined to process this document ({focus} pass).")
     if response.stop_reason == "max_tokens":
         raise ExtractionError(
-            "Extraction hit the output limit before finishing; the document is unusually "
-            "long. Raise MAX_TOKENS or split the PDF."
+            f"The {focus} pass hit the output limit before finishing; the document is "
+            "unusually long. Raise MAX_TOKENS or split the PDF."
         )
 
-    report = response.parsed_output
-    if report is None:
-        raise ExtractionError("The model returned no structured output.")
-    return report
+    parsed = response.parsed_output
+    if parsed is None:
+        raise ExtractionError(f"The model returned no structured output ({focus} pass).")
+    return parsed
 
 
 def completeness(report: SyndicateReport) -> tuple[int, int]:
@@ -128,12 +152,11 @@ def completeness(report: SyndicateReport) -> tuple[int, int]:
     """
     found = 0
     total = 0
-    for name in report.__class__.model_fields:
-        field = getattr(report, name)
-        # Explicit type check, not hasattr("value"): enum members carry a .value
-        # too, which would count distribution_unit as a populated figure.
-        if isinstance(field, FIGURE_TYPES):
-            total += 1
-            if field.value is not None:
-                found += 1
+    # iter_figures walks the grouped schema, so completeness does not need to
+    # know how fields are grouped. Enum members are excluded by construction --
+    # they carry a .value too and would otherwise be miscounted as figures.
+    for _name, figure in iter_figures(report):
+        total += 1
+        if figure.value is not None:
+            found += 1
     return found, total

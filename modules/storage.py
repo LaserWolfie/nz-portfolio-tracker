@@ -19,8 +19,8 @@ to the schema extends the sheet rather than silently dropping the new data.
 from datetime import datetime, timezone
 
 from modules import sheets
-from modules.extraction import FIGURE_TYPES, completeness
-from modules.schema import SyndicateReport
+from modules.extraction import completeness
+from modules.schema import SyndicateReport, figure_names, iter_figures
 
 PERIODS_WORKSHEET = "Syndicate_Periods"
 BASELINE_WORKSHEET = "Syndicate_Baseline"
@@ -45,6 +45,7 @@ PERIOD_DERIVED_COLUMNS = [
     "swap_count",
     "manager_fee_total_dollars",
     "manager_fee_total_percent",
+    "rent_reversion_percent",
     "completeness_found",
     "completeness_total",
     "raw_json",
@@ -70,13 +71,11 @@ BASELINE_COLUMNS = [
 
 
 def _figure_field_names() -> list[str]:
-    """Schema fields that wrap a single value with provenance, in schema order."""
-    names = []
-    for name, field in SyndicateReport.model_fields.items():
-        annotation = field.annotation
-        if annotation in FIGURE_TYPES:
-            names.append(name)
-    return names
+    """Schema fields that wrap a single value with provenance, in schema order.
+
+    Delegates to the schema so regrouping fields never silently drops a column.
+    """
+    return figure_names()
 
 
 def period_columns() -> list[str]:
@@ -153,40 +152,46 @@ def flatten_report(
     """
     row = {
         "syndicate_id": syndicate_id,
-        "period_end": report.period_end_date.value,
-        "entity_name_as_reported": report.entity_name.value,
+        "period_end": report.identity.period_end_date.value,
+        "entity_name_as_reported": report.identity.entity_name.value,
         "source_filename": source_filename,
         "extracted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model": model,
     }
 
-    for name in _figure_field_names():
-        field = getattr(report, name)
-        row[name] = field.value
-        row[f"{name}_page"] = field.page
+    for name, figure in iter_figures(report):
+        row[name] = figure.value
+        row[f"{name}_page"] = figure.page
 
-    row["distribution_unit"] = report.distribution_unit.value
+    row["distribution_unit"] = report.returns.distribution_unit.value
     row["extraction_notes"] = report.extraction_notes
 
     # A facility that matures next month but was refinanced after balance date
     # is not a live risk. Prefer the post-balance-date expiry where disclosed.
     row["effective_facility_expiry"] = (
-        report.post_balance_date_facility_expiry.value or report.facility_expiry.value
+        report.debt.post_balance_date_facility_expiry.value
+        or report.debt.facility_expiry.value
     )
 
-    row["earliest_swap_expiry"] = _earliest([s.expiry_date for s in report.swap_expiries])
-    notionals = [s.notional_amount for s in report.swap_expiries if s.notional_amount]
+    swaps = report.debt.swap_expiries
+    row["earliest_swap_expiry"] = _earliest([s.expiry_date for s in swaps])
+    notionals = [s.notional_amount for s in swaps if s.notional_amount]
     row["total_swap_notional"] = sum(notionals) if notionals else None
-    row["swap_count"] = len(report.swap_expiries)
+    row["swap_count"] = len(swaps)
 
-    dollars = [f.amount for f in report.manager_fees if f.amount]
-    percents = [
-        f.percent_of_scheme_property
-        for f in report.manager_fees
-        if f.percent_of_scheme_property
-    ]
+    fees = report.conduct.manager_fees
+    dollars = [f.amount for f in fees if f.amount]
+    percents = [f.percent_of_scheme_property for f in fees if f.percent_of_scheme_property]
     row["manager_fee_total_dollars"] = sum(dollars) if dollars else None
     row["manager_fee_total_percent"] = sum(percents) if percents else None
+
+    # How far passing rent sits above (positive) or below (negative) market rent.
+    # Positive means rents fall as leases roll; negative means reversionary upside.
+    market = report.tenancy.net_market_rent_per_sqm.value
+    passing = report.tenancy.net_passing_rent_per_sqm.value
+    row["rent_reversion_percent"] = (
+        round((passing - market) / market * 100, 2) if market and passing else None
+    )
 
     found, total = completeness(report)
     row["completeness_found"] = found

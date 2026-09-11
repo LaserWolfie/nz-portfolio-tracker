@@ -113,14 +113,9 @@ class ManagerFee(BaseModel):
     page: int | None = Field(description="1-based PDF page number.")
 
 
-class SyndicateReport(BaseModel):
-    """One investor report for one syndicate for one period.
+class Identity(BaseModel):
+    """Who and when. Extracted first so the model anchors on the document."""
 
-    Field order here is the extraction order. Identity and period first so the
-    model anchors on the document before reading figures out of it.
-    """
-
-    # --- Identity and period -------------------------------------------------
     entity_name: TextFigure = Field(
         description="Full legal name of the syndicate / scheme as printed on this report."
     )
@@ -134,7 +129,10 @@ class SyndicateReport(BaseModel):
         "'Annual Report', 'Interim Financial Statements'."
     )
 
-    # --- Valuation and capital ----------------------------------------------
+
+class Valuation(BaseModel):
+    """What the property is worth and the assumptions behind that number."""
+
     valuation: Figure = Field(
         description="Most recent stated property valuation, in dollars."
     )
@@ -148,12 +146,35 @@ class SyndicateReport(BaseModel):
         "statements or key information summary, not a rounded headline like '$45K'."
     )
     cash: Figure = Field(description="Cash and cash equivalents held, in dollars.")
+    capitalisation_rate_percent: Figure = Field(
+        description="The adopted market capitalisation rate used in the valuation, as a "
+        "whole percent, e.g. 6.38 for 6.38%. Where a sensitivity table shows rates either "
+        "side, take the ADOPTED rate, not the +/- scenarios."
+    )
+    discount_rate_percent: Figure = Field(
+        description="The discount rate used in the discounted cash flow valuation, as a "
+        "whole percent, e.g. 7.50."
+    )
+    terminal_yield_percent: Figure = Field(
+        description="The terminal yield used in the valuation, as a whole percent, "
+        "e.g. 6.50."
+    )
 
-    # --- Debt ----------------------------------------------------------------
+
+class Debt(BaseModel):
+    """Borrowings, covenants and hedging."""
+
     total_debt: Figure = Field(description="Total drawn bank debt, in dollars.")
     facility_expiry: DateFigure = Field(
         description="Expiry / maturity date of the bank facility. If several facilities "
         "exist, use the earliest expiry."
+    )
+    post_balance_date_facility_expiry: DateFigure = Field(
+        description="If the report discloses in its subsequent-events note that the "
+        "facility was refinanced, extended or replaced AFTER the balance date, the expiry "
+        "date of the new facility. Null if no such event is disclosed. This matters "
+        "because a facility expiring weeks after balance date may already have been "
+        "refinanced for years by the time the report is published."
     )
     lvr_percent: Figure = Field(
         description="Loan to value ratio as a whole percent, e.g. 42.5 for 42.5%."
@@ -175,15 +196,11 @@ class SyndicateReport(BaseModel):
         "the report discloses no hedging. Dates are usually printed day-first "
         "(8/06/2026 is 8 June 2026, not 6 August)."
     )
-    post_balance_date_facility_expiry: DateFigure = Field(
-        description="If the report discloses in its subsequent-events note that the "
-        "facility was refinanced, extended or replaced AFTER the balance date, the expiry "
-        "date of the new facility. Null if no such event is disclosed. This matters "
-        "because a facility expiring weeks after balance date may already have been "
-        "refinanced for years by the time the report is published."
-    )
 
-    # --- Property performance -------------------------------------------------
+
+class Tenancy(BaseModel):
+    """Income security: who is paying, for how long, and at what rent."""
+
     occupancy_percent: Figure = Field(
         description="Occupancy as a whole percent, e.g. 97.5 for 97.5%. Record this ONLY "
         "if the report explicitly labels a figure as occupancy. Never derive it from a "
@@ -198,8 +215,27 @@ class SyndicateReport(BaseModel):
         description="Weighted average lease expiry in years, e.g. 4.2. Also reported as "
         "WALT. Never expressed as a percentage."
     )
+    net_market_rent_per_sqm: Figure = Field(
+        description="Assessed net MARKET rent per square metre, in dollars. This is what "
+        "the valuer considers the space would let for today."
+    )
+    net_passing_rent_per_sqm: Figure = Field(
+        description="Net PASSING rent per square metre, in dollars -- what tenants are "
+        "actually paying under current leases. Distinct from market rent: a property let "
+        "above market will see rent fall as leases roll."
+    )
+    net_lettable_area_sqm: Figure = Field(
+        description="Net lettable area of the property in square metres."
+    )
+    nbs_rating_percent: Figure = Field(
+        description="Seismic rating as a percentage of New Building Standard (NBS), e.g. "
+        "100 for 100% NBS. Null if the report does not state one."
+    )
 
-    # --- Distributions ---------------------------------------------------------
+
+class Returns(BaseModel):
+    """What reached investors, and what supported it."""
+
     distribution_rate: Figure = Field(
         description="The distribution rate for this period as printed. Reports often "
         "carry TWO different rates -- an 'average distribution rate' expressed on the "
@@ -215,8 +251,6 @@ class SyndicateReport(BaseModel):
         description="Distributions as a whole percent of distributable profit, "
         "e.g. 95.0 for 95%."
     )
-
-    # --- Earnings ----------------------------------------------------------------
     adjusted_operating_profit: Figure = Field(
         description="The report's headline ADJUSTED earnings figure for the period, in "
         "dollars: the figure a non-GAAP reconciliation arrives at after removing fair "
@@ -233,18 +267,128 @@ class SyndicateReport(BaseModel):
         "the report states one to compare against."
     )
 
-    # --- Fees ----------------------------------------------------------------------
+
+class Conduct(BaseModel):
+    """What the manager charged and how it behaved."""
+
     manager_fees: list[ManagerFee] = Field(
         description="Every manager remuneration line disclosed, split by the report's own "
         "categories. Empty list if none is disclosed."
     )
+    management_fee_escalation_basis: TextFigure = Field(
+        description="How the management fee changes over time, quoted or closely "
+        "paraphrased from the report -- for example an annual increase at the greater of "
+        "3% or CPI. This is the clause that determines whether fees rise independently of "
+        "performance. Null if the report does not describe one."
+    )
+    capex_spent: Figure = Field(
+        description="Capital expenditure on the property during the period, in dollars, "
+        "including capitalised building works and investment property additions. Evidence "
+        "of whether the manager is reinvesting in the asset."
+    )
+    lease_incentives_paid: Figure = Field(
+        description="Lease incentives paid or capitalised during the period, in dollars. "
+        "Large incentives can mean headline rents are being sustained by giving value "
+        "back to tenants."
+    )
+    related_party_transactions: TextFigure = Field(
+        description="What the report says about related party transactions -- quote or "
+        "closely paraphrase. Many reports state there were none; record that statement "
+        "rather than null, so silence and an explicit 'none' stay distinguishable."
+    )
 
-    # --- Extraction notes -------------------------------------------------------------
+
+class SyndicateReport(BaseModel):
+    """One investor report for one syndicate for one period.
+
+    Grouped rather than flat for a hard reason: the structured-output grammar is
+    compiled from the JSON Schema, and its size grows with the number of
+    TOP-LEVEL required properties. At 36 flat fields the API rejects the request
+    with "The compiled grammar is too large". The same 34 leaf figures nested
+    under six groups compile without complaint. Add new fields inside a group,
+    never at the top level.
+    """
+
+    identity: Identity
+    valuation: Valuation
+    debt: Debt
+    tenancy: Tenancy
+    returns: Returns
+    conduct: Conduct
+
     extraction_notes: str | None = Field(
         description="Anything ambiguous, contradictory, or restated that a human should "
         "check: figures given on two different bases, prior-period restatements, unusual "
         "one-offs. Null if nothing of the sort."
     )
+
+
+class FinancialPass(BaseModel):
+    """First extraction pass: the money and the debt."""
+
+    identity: Identity
+    valuation: Valuation
+    debt: Debt
+    returns: Returns
+    extraction_notes: str | None = Field(
+        description="Anything ambiguous, contradictory or restated in these figures that "
+        "a human should check. Null if nothing of the sort."
+    )
+
+
+class AssetPass(BaseModel):
+    """Second extraction pass: the building, its tenants, and the manager's conduct."""
+
+    tenancy: Tenancy
+    conduct: Conduct
+    extraction_notes: str | None = Field(
+        description="Anything ambiguous, contradictory or restated in these figures that "
+        "a human should check. Null if nothing of the sort."
+    )
+
+
+def merge_passes(financial: FinancialPass, asset: AssetPass) -> "SyndicateReport":
+    """Combine the two passes into the single report the rest of the app uses."""
+    notes = [n for n in (financial.extraction_notes, asset.extraction_notes) if n]
+    return SyndicateReport(
+        identity=financial.identity,
+        valuation=financial.valuation,
+        debt=financial.debt,
+        tenancy=asset.tenancy,
+        returns=financial.returns,
+        conduct=asset.conduct,
+        extraction_notes=" ".join(notes) or None,
+    )
+
+
+#: Group attribute names on SyndicateReport, in extraction order.
+GROUP_NAMES = ["identity", "valuation", "debt", "tenancy", "returns", "conduct"]
+
+
+def iter_figures(report):
+    """Yield (leaf_name, figure) for every provenance-wrapped value in the report.
+
+    Lets storage and completeness walk the schema without caring how it is
+    grouped, so regrouping never silently drops a column.
+    """
+    for group_name in GROUP_NAMES:
+        group = getattr(report, group_name)
+        for name in group.__class__.model_fields:
+            value = getattr(group, name)
+            if isinstance(value, (Figure, DateFigure, TextFigure)):
+                yield name, value
+
+
+def figure_names() -> list[str]:
+    """Leaf figure names in schema order, without needing an instance."""
+    names = []
+    for group_name, group_field in SyndicateReport.model_fields.items():
+        if group_name not in GROUP_NAMES:
+            continue
+        for name, field in group_field.annotation.model_fields.items():
+            if field.annotation in (Figure, DateFigure, TextFigure):
+                names.append(name)
+    return names
 
 
 EXTRACTION_SYSTEM_PROMPT = """\
@@ -301,7 +445,23 @@ Rules:
 """
 
 
-def build_extraction_prompt(syndicate_name: str | None = None) -> str:
+#: What each pass is looking for, so the model knows where to concentrate.
+PASS_FOCUS = {
+    "financial": (
+        "Concentrate on the financial statements, the key information summary and the "
+        "borrowings note: valuation, net assets, cash, debt, facility and covenant terms, "
+        "hedging, distributions and earnings."
+    ),
+    "asset": (
+        "Concentrate on the property and valuation notes and the fees disclosures: "
+        "occupancy or vacancy, lease expiry, market and passing rents, lettable area, "
+        "seismic rating, capital expenditure, lease incentives, manager fees and related "
+        "party dealings."
+    ),
+}
+
+
+def build_extraction_prompt(syndicate_name: str | None = None, focus: str | None = None) -> str:
     """The per-document user instruction accompanying the PDF."""
     target = (
         f"This report is expected to relate to {syndicate_name}. If the document is "
@@ -311,8 +471,9 @@ def build_extraction_prompt(syndicate_name: str | None = None) -> str:
         if syndicate_name
         else ""
     )
+    focus_text = f"{PASS_FOCUS[focus]}\n\n" if focus in PASS_FOCUS else ""
     return (
-        f"{target}Extract this investor report into the schema. Work through the document "
-        "and record each field with its page number and a verbatim supporting quote, using "
-        "null for anything the document does not state."
+        f"{target}{focus_text}Extract this investor report into the schema. Work through "
+        "the document and record each field with its page number and a verbatim supporting "
+        "quote, using null for anything the document does not state."
     )

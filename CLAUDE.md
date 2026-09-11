@@ -123,6 +123,32 @@ everything opens by key.
 **Units are pinned in the schema**: percentages whole (45.0 = 45%), ratios as multiples
 (2.5 = 2.5x), WALE in years. Tests guard the ICR case specifically.
 
+#### The grammar limit — read before adding a field
+
+Structured outputs compile the JSON Schema into a decoding grammar, and that grammar has
+a size ceiling. Exceed it and every request fails with a 400:
+
+> The compiled grammar is too large, which would cause performance issues.
+
+Measured, not guessed: **36 flat top-level fields is rejected; the same leaves nested
+under 7 groups is accepted.** Stripping descriptions does not help (5,908-char schema
+still rejected), and neither does dropping the list fields or the enum — it is driven by
+leaf count and top-level property count, not by schema text size.
+
+Two consequences, both load-bearing:
+
+1. `SyndicateReport` is **grouped** — `identity`, `valuation`, `debt`, `tenancy`,
+   `returns`, `conduct`. Add new fields *inside a group*, never at the top level. A test
+   asserts the top level stays at or below 10 properties.
+2. Extraction runs as **two passes** (`FinancialPass`, `AssetPass`), merged by
+   `merge_passes()`. Even grouped, all 32 figures in one request exceeds the ceiling. The
+   passes run **concurrently**, so wall time is unchanged (~42s) at twice the token cost
+   (~$0.80/report). Each pass also gets a focused prompt naming the sections to
+   concentrate on, which is a quality gain rather than only a workaround.
+
+Walk figures with `schema.iter_figures(report)` / `schema.figure_names()` rather than
+touching `model_fields` directly, so regrouping never silently drops a storage column.
+
 ### Phase 2 — Storage ✅ done
 `modules/storage.py`. Both tabs exist in the property spreadsheet and are written **by
 header name**; `tests/test_storage.py` covers the contract with a faked worksheet.
@@ -215,3 +241,38 @@ New `pages/4_…_Quarterly_Review.py` following the existing session_state guard
 - Claude API work: follow the `claude-api` skill. Default model `claude-opus-5`.
 - Keep the `document` content block for PDFs — never pre-extract text.
 - New numeric parsing for ratios must not reuse `clean_percent` (see Gotchas).
+
+## Benchmarking (planned)
+
+The goal is not only change detection but **comparison against the industry, and holding
+managers to account for creating value**. Four benchmark sources, all wanted:
+
+1. **The portfolio itself** — 30+ syndicates is its own peer set. Percentile ranks for
+   cap rate, fee load, LVR, WALE, rent reversion and payout ratio need no external data,
+   and because several syndicates share a manager, the same manager can be compared
+   across their own funds.
+2. **Listed NZ property vehicles** — Precinct, Argosy, Goodman, Kiwi Property, Property
+   for Industry publish comparable metrics semi-annually.
+3. **Valuer sector data** — CBRE / Colliers / JLL NZ cap rate and market rent series by
+   sector and region.
+4. **The IM and trust deed** — each manager against what they themselves forecast.
+   `Syndicate_Baseline` already holds these columns.
+
+Sources 2 and 3 are external reference series; both should land in one
+`Industry_Benchmarks` tab keyed by (metric, sector, period, source) so the benchmarking
+module reads one mechanism rather than two.
+
+### Manager-accountability fields (added, extracted, verified)
+
+- `capitalisation_rate_percent`, `discount_rate_percent`, `terminal_yield_percent` — the
+  valuation assumptions, and the most directly comparable metrics against sector data.
+- `net_market_rent_per_sqm` vs `net_passing_rent_per_sqm`, with derived
+  `rent_reversion_percent`. **Augusta is let 28.4% above market** ($818 passing vs $637
+  market) on a 3.35-year WALE, so rents fall as leases roll. Invisible to any
+  period-on-period comparison.
+- `capex_spent` — Augusta spent **$16,735** on a $115m property.
+- `lease_incentives_paid`, `nbs_rating_percent`, `net_lettable_area_sqm`.
+- `management_fee_escalation_basis` — Augusta's fee rises annually at "the greater of 3%
+  or CPI", i.e. independently of performance.
+- `related_party_transactions` — recorded as a statement, so an explicit "there were
+  none" stays distinguishable from silence.

@@ -4,7 +4,7 @@ import plotly.express as px
 import altair as alt
 from datetime import datetime
 import os
-from modules import extraction, sheets, storage, utils
+from modules import extraction, schema, sheets, storage, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -266,28 +266,27 @@ with tab_upload:
             "did not state it — not zero."
         )
 
-        rows = []
-        for name in report.__class__.model_fields:
-            field = getattr(report, name)
-            if isinstance(field, extraction.FIGURE_TYPES):
-                rows.append({
-                    "Field": name.replace('_', ' ').title(),
-                    "Value": field.value,
-                    "Page": field.page,
-                    "Source": field.source_text,
-                })
+        rows = [
+            {
+                "Field": name.replace('_', ' ').title(),
+                "Value": figure.value,
+                "Page": figure.page,
+                "Source": figure.source_text,
+            }
+            for name, figure in schema.iter_figures(report)
+        ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        if report.swap_expiries:
+        if report.debt.swap_expiries:
             st.markdown("**Swap / hedge expiries**")
             st.dataframe(
-                pd.DataFrame([s.model_dump() for s in report.swap_expiries]),
+                pd.DataFrame([s.model_dump() for s in report.debt.swap_expiries]),
                 use_container_width=True, hide_index=True,
             )
-        if report.manager_fees:
+        if report.conduct.manager_fees:
             st.markdown("**Manager fees by category**")
             st.dataframe(
-                pd.DataFrame([f.model_dump() for f in report.manager_fees]),
+                pd.DataFrame([f.model_dump() for f in report.conduct.manager_fees]),
                 use_container_width=True, hide_index=True,
             )
         if report.extraction_notes:
@@ -295,7 +294,7 @@ with tab_upload:
 
         # --- SAVE TO Syndicate_Periods -------------------------------------
         st.markdown("##### Save")
-        if not report.period_end_date.value:
+        if not report.identity.period_end_date.value:
             st.error(
                 "No period end date was found, so this report cannot be filed against a "
                 "period. Check the document before saving."
@@ -311,14 +310,14 @@ with tab_upload:
                 spreadsheet = None
 
             known_ids = [str(r.get('syndicate_id')) for r in baseline_rows if r.get('syndicate_id')]
-            matched = storage.resolve_syndicate_id(report.entity_name.value, baseline_rows)
+            matched = storage.resolve_syndicate_id(report.identity.entity_name.value, baseline_rows)
 
             if matched:
                 st.success(f"Matched to syndicate **{matched}**")
                 syndicate_id = matched
             elif known_ids:
                 st.warning(
-                    f"Could not match “{report.entity_name.value}” to a known syndicate. "
+                    f"Could not match “{report.identity.entity_name.value}” to a known syndicate. "
                     "Pick one, or add an alias in Syndicate_Baseline."
                 )
                 syndicate_id = st.selectbox("File under syndicate", known_ids)
@@ -332,7 +331,7 @@ with tab_upload:
             if syndicate_id and spreadsheet is not None:
                 st.caption(
                     f"Saves to **{storage.PERIODS_WORKSHEET}** as "
-                    f"`{syndicate_id}` / `{report.period_end_date.value}`. "
+                    f"`{syndicate_id}` / `{report.identity.period_end_date.value}`. "
                     "Re-saving the same period overwrites that row rather than adding one."
                 )
                 if st.button("💾 Save to sheet", type="primary"):
