@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "wealth-manager",
+      "runtimeExecutable": ".venvapp/Scripts/python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "Home.py", "--server.port", "8502", "--server.headless", "true"],
+      "port": 8502
+    }
+  ]
+}

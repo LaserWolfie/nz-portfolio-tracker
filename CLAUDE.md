@@ -29,7 +29,9 @@ it in a password field. Neither secret is in git.
 | `Home.py` | Entry point. Loads Sheets + CSVs into `st.session_state` (`stock_df`, `prop_df`, `personal_df`). Every page depends on this having run. |
 | `pages/1_📈_Stock_Portfolio.py` | Equities view (442 lines). |
 | `pages/2_📊_Portfolio_Dashboard.py` | Combined net-worth / cashflow view. |
-| `pages/3_🏢_Property_Forensics.py` | Property dashboard + the AI PDF report scanner. |
+| `pages/3_🏢_Property_Forensics.py` | Property dashboard + the ad-hoc single-document scanner. |
+| `pages/4_🔎_Quarterly_Review.py` | The quarterly cycle: batch intake, ranked flags, draft notes. |
+| `modules/ui.py` | Shared Streamlit helpers: the session_state guard, credential resolution, flag rendering. |
 | `modules/sheets.py` | Sheet keys, worksheet names, cached credentials, `open_*_worksheet()` helpers. |
 | `modules/utils.py` | `clean_number`, `clean_percent`. |
 | `modules/authentication.py` | `connect_to_sheet()` — opens by **name**. Unused by the live pages; supersede with `modules/sheets.py`. |
@@ -233,8 +235,33 @@ bad document doesn't sink the run.
 Per-syndicate note and draft manager questions generated **only** from the stored row and
 its flags — never from the PDF. This keeps the narrative traceable to structured data.
 
-### Phase 6 — UI
-New `pages/4_…_Quarterly_Review.py` following the existing session_state guard pattern.
+### Phase 6 — UI ✅ done
+`pages/4_🔎_Quarterly_Review.py`, following the session_state guard pattern.
+
+The pages split along what you are actually doing:
+
+- **Property Forensics** — the portfolio dashboard and the ad-hoc single-document
+  scanner. It had grown to four tabs and ~580 lines; now two tabs and 343.
+- **Quarterly Review** — batch intake on one tab, the ranked worklist and draft notes on
+  the other. This is the page for when a quarter arrives.
+
+`modules/ui.py` holds what both pages need — `require_portfolio_data()`,
+`anthropic_credentials()`, `load_pipeline_data()`, `render_flag()` — so the guard and the
+credential chain are written once. It is the only module that imports Streamlit alongside
+pipeline logic; `extraction`, `deltas`, `storage`, `batch` and `narrative` stay headless
+and testable.
+
+Two things worth knowing about the page:
+
+- Stored rows are read once at page load, so a batch saved on the intake tab is not
+  visible on the flags tab until a re-run. Hence the explicit **Reload stored rows**
+  button.
+- Navigating straight to a page URL starts a fresh Streamlit session with empty
+  `session_state`, so the guard fires. Reach the pages through the sidebar.
+
+Verified in the running app against live data: the guard fires on direct access, Home
+populates, Quarterly Review renders the Augusta row with both flags colour-ranked, and
+Property Forensics still shows its dashboard.
 
 ## Conventions
 

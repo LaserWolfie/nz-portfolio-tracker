@@ -3,8 +3,7 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
-import os
-from modules import batch, deltas, extraction, narrative, schema, sheets, storage, utils
+from modules import extraction, schema, sheets, storage, ui, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -74,12 +73,14 @@ scenario_label = f"{rate_adjustment:+.2f}% Rates" if rate_adjustment != 0 else "
 st.title("🏢 Property Forensics")
 
 # Create Tabs to separate View vs Input
-tab_dash, tab_upload, tab_batch, tab_review = st.tabs([
+tab_dash, tab_upload = st.tabs([
     "📊 Portfolio Dashboard",
     "📄 Upload Report (AI Scanner)",
-    "📦 Batch Intake (Quarter)",
-    "🔎 Quarterly Review",
 ])
+st.caption(
+    "Reviewing a whole quarter? Use the **Quarterly Review** page — batch intake, "
+    "flags and draft manager questions live there."
+)
 
 # ==========================================
 # TAB 1: FORENSIC DASHBOARD
@@ -216,18 +217,7 @@ with tab_upload:
     st.header("📄 PDF Report Scanner")
     st.markdown("Upload an Annual Report PDF. Claude will extract the forensic data for you.")
 
-    # A key is optional: without one the SDK falls back to ANTHROPIC_API_KEY in the
-    # environment, an `ant auth login` profile, or Workload Identity Federation.
-    if "ANTHROPIC_API_KEY" in st.secrets:
-        api_key = st.secrets["ANTHROPIC_API_KEY"]
-        st.success("🔑 API key loaded from secrets")
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        api_key = None
-        st.success("🔑 Using credentials from the environment")
-    else:
-        api_key = st.text_input("Enter Anthropic API Key:", type="password") or None
-        if not api_key:
-            st.info("No key found. Enter one above, or set ANTHROPIC_API_KEY in the environment.")
+    api_key, have_credentials = ui.anthropic_credentials()
 
     uploaded_file = st.file_uploader("Drag & Drop Report Here", type=['pdf'])
     expected_name = st.text_input(
@@ -236,7 +226,6 @@ with tab_upload:
              "syndicate. It never overrides what the document says.",
     )
 
-    have_credentials = bool(api_key) or bool(os.environ.get("ANTHROPIC_API_KEY"))
     if uploaded_file and have_credentials:
         if st.button("🚀 Scan Document", type="primary"):
             with st.spinner("🤖 Claude is reading the report..."):
@@ -352,242 +341,3 @@ with tab_upload:
                         st.error(f"Save failed: {e}")
                     else:
                         st.success(f"Saved ({status}).")
-
-# ==========================================
-# TAB 3: BATCH INTAKE
-# ==========================================
-with tab_batch:
-    st.header("📦 Batch Intake")
-    st.markdown(
-        "Upload a whole quarter's reports at once. Matching runs first and costs "
-        "nothing, so you can check the plan before spending anything on extraction."
-    )
-
-    if not have_credentials:
-        st.info("Set ANTHROPIC_API_KEY in secrets or the environment to run a batch.")
-    else:
-        uploads = st.file_uploader(
-            "Drop this quarter's PDFs here",
-            type=['pdf'],
-            accept_multiple_files=True,
-            key="batch_uploads",
-        )
-
-        if uploads:
-            try:
-                batch_spreadsheet = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
-                batch_baseline = storage.load_baseline(
-                    batch_spreadsheet.worksheet(storage.BASELINE_WORKSHEET)
-                )
-            except Exception as e:
-                st.error(f"Could not read {storage.BASELINE_WORKSHEET}: {e}")
-                batch_baseline, batch_spreadsheet = [], None
-
-            # --- Plan: free, no API calls ---
-            plan = batch.plan_batch([f.name for f in uploads], batch_baseline)
-            unmatched = [i for i in plan if i.status == batch.Status.UNMATCHED]
-
-            st.subheader("1. Match plan")
-            st.dataframe(
-                pd.DataFrame([{
-                    "File": i.filename,
-                    "Matched syndicate": i.syndicate_id or "— will use the document —",
-                } for i in plan]),
-                use_container_width=True, hide_index=True,
-            )
-            if unmatched:
-                st.warning(
-                    f"{len(unmatched)} file(s) did not match on filename. They will still "
-                    "be extracted — the entity name inside the document is authoritative "
-                    "and usually resolves them."
-                )
-            st.caption(
-                f"{len(plan)} document(s). Estimated extraction cost "
-                f"**~${batch.estimated_cost(plan):.2f}** at {extraction.DEFAULT_MODEL} rates. "
-                "Matching above was free."
-            )
-
-            st.subheader("2. Extract")
-            if st.button(f"🚀 Extract {len(plan)} document(s)", type="primary"):
-                progress = st.progress(0.0, text="Starting…")
-                documents = {f.name: f.read() for f in uploads}
-
-                def _tick(done, total, item):
-                    progress.progress(done / total, text=f"{done}/{total} — {item.filename}")
-
-                results = batch.run_batch(
-                    documents, batch_baseline,
-                    api_key=api_key, model=extraction.DEFAULT_MODEL, on_progress=_tick,
-                )
-                progress.empty()
-                st.session_state['batch_results'] = results
-
-        results = st.session_state.get('batch_results')
-        if results:
-            st.subheader("3. Results")
-            counts = batch.summarise(results)
-            st.write(" · ".join(f"**{n}** {status}" for status, n in sorted(counts.items())))
-
-            st.dataframe(
-                pd.DataFrame([{
-                    "File": i.filename,
-                    "Status": i.status,
-                    "Syndicate": i.syndicate_id or "",
-                    "Period": i.period_end or "",
-                    "Found": f"{i.completeness[0]}/{i.completeness[1]}" if i.completeness else "",
-                    "Note": (i.error or " ".join(i.notes))[:140],
-                } for i in results]),
-                use_container_width=True, hide_index=True,
-            )
-
-            attention = [i for i in results if i.needs_attention]
-            if attention:
-                st.warning(f"{len(attention)} document(s) need a decision before saving.")
-                for i in attention:
-                    with st.expander(f"{i.status.upper()} — {i.filename}"):
-                        if i.error:
-                            st.error(i.error)
-                        for note in i.notes:
-                            st.write(f"• {note}")
-
-            ready = [i for i in results
-                     if i.report and i.syndicate_id and i.period_end
-                     and i.status == batch.Status.EXTRACTED]
-            conflicts = [i for i in results if i.status == batch.Status.CONFLICT]
-            sparse = [i for i in results if i.status == batch.Status.SPARSE]
-
-            st.subheader("4. Save")
-            include = False
-            include_sparse = False
-            if conflicts:
-                include = st.checkbox(
-                    f"Also save {len(conflicts)} conflicted document(s), filing each under "
-                    "the syndicate named inside the document",
-                    value=False,
-                )
-            if sparse:
-                include_sparse = st.checkbox(
-                    f"Also save {len(sparse)} sparse document(s) — usually tax statements "
-                    "or valuation letters rather than full reports. Saving one makes the "
-                    "fields it omits look withdrawn next quarter.",
-                    value=False,
-                )
-            total_to_save = (len(ready) + (len(conflicts) if include else 0)
-                             + (len(sparse) if include_sparse else 0))
-            st.caption(
-                f"{total_to_save} row(s) will be written to {storage.PERIODS_WORKSHEET}. "
-                "Re-saving a period overwrites that row rather than adding one."
-            )
-            if total_to_save and st.button(f"💾 Save {total_to_save} row(s)"):
-                batch.save_batch(
-                    results, spreadsheet=batch_spreadsheet,
-                    model=extraction.DEFAULT_MODEL, include_conflicts=include,
-                    include_sparse=include_sparse,
-                )
-                saved = sum(1 for i in results if i.status == batch.Status.SAVED)
-                st.success(f"Saved {saved} row(s).")
-                st.session_state['batch_results'] = results
-
-
-# ==========================================
-# TAB 4: FLAGS AND NOTES
-# ==========================================
-with tab_review:
-    st.header("🔎 Quarterly Review")
-    st.markdown(
-        "Ranked by what needs attention. Flags come from stored figures only — no "
-        "document is re-read, so every statement traces back to a saved number."
-    )
-
-    try:
-        review_ss = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
-        period_rows = review_ss.worksheet(storage.PERIODS_WORKSHEET).get_all_records()
-        baseline_rows = storage.load_baseline(
-            review_ss.worksheet(storage.BASELINE_WORKSHEET))
-    except Exception as e:
-        st.error(f"Could not read the storage tabs: {e}")
-        period_rows, baseline_rows, review_ss = [], [], None
-
-    if not period_rows:
-        st.info(
-            f"{storage.PERIODS_WORKSHEET} is empty. Extract and save some reports first."
-        )
-    else:
-        baseline_by_id = {str(b.get('syndicate_id')): b for b in baseline_rows}
-        reviews = deltas.review_all(period_rows, baseline_rows)
-        attention = [r for r in reviews if r.needs_attention]
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Syndicates stored", len(reviews))
-        c2.metric("Needing attention", len(attention))
-        c3.metric("Flags raised", sum(len(r.flags) for r in reviews))
-
-        severity_icon = {
-            "CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "INFO": "⚪",
-        }
-
-        for review in reviews:
-            name = baseline_by_id.get(review.syndicate_id, {}).get(
-                'canonical_name', review.syndicate_id)
-            icon = severity_icon.get(str(review.worst), "⚪")
-            label = f"{icon} {name} — {review.period_end} ({len(review.flags)} flag(s))"
-
-            with st.expander(label, expanded=review.needs_attention):
-                for f in review.flags:
-                    line = f"{severity_icon.get(str(f.severity), '')} **{f.severity}** — {f.message}"
-                    if f.severity >= deltas.Severity.HIGH:
-                        st.error(line)
-                    elif f.severity == deltas.Severity.MEDIUM:
-                        st.warning(line)
-                    else:
-                        st.info(line)
-                if not review.flags:
-                    st.success("No flags this period.")
-
-                row = next((r for r in period_rows
-                            if str(r.get('syndicate_id')) == review.syndicate_id
-                            and str(r.get('period_end')) == review.period_end), None)
-
-                key = f"note_{review.syndicate_id}_{review.period_end}"
-                if st.button("✍️ Draft note and manager questions", key=f"btn_{key}"):
-                    if not have_credentials:
-                        st.error("Set ANTHROPIC_API_KEY to draft notes.")
-                    else:
-                        with st.spinner("Writing from the stored figures…"):
-                            try:
-                                st.session_state[key] = narrative.write_narrative(
-                                    row,
-                                    review.flags,
-                                    deltas.prior_period(period_rows, review.syndicate_id,
-                                                        review.period_end),
-                                    baseline_by_id.get(review.syndicate_id),
-                                    api_key=api_key,
-                                )
-                            except Exception as e:
-                                st.error(f"Could not draft the note: {e}")
-
-                note = st.session_state.get(key)
-                if note:
-                    st.markdown(f"**{note.headline}**")
-                    st.write(note.note)
-                    if note.questions:
-                        st.markdown("**Questions for the manager**")
-                        for i, q in enumerate(note.questions, 1):
-                            st.write(f"{i}. {q.question}")
-                            st.caption(f"basis: {q.basis}")
-                    if note.data_gaps:
-                        st.caption("Not disclosed: " + "; ".join(note.data_gaps))
-
-                    facts = narrative.build_facts(
-                        row, review.flags,
-                        deltas.prior_period(period_rows, review.syndicate_id,
-                                            review.period_end),
-                        baseline_by_id.get(review.syndicate_id))
-                    stray = narrative.unsupported_numbers(note, facts)
-                    if stray:
-                        st.error(
-                            "These numbers do not appear in the stored figures and may be "
-                            f"invented: {', '.join(stray)}"
-                        )
-                    else:
-                        st.caption("✅ Every figure quoted traces back to a stored value.")
