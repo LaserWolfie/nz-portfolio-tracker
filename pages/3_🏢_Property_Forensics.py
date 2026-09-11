@@ -3,10 +3,7 @@ import pandas as pd
 import plotly.express as px
 import altair as alt
 from datetime import datetime
-import anthropic
-import base64
-import json
-from modules import sheets, utils
+from modules import extraction, sheets, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -265,71 +262,74 @@ with tab_upload:
         api_key = st.text_input("Enter Anthropic API Key:", type="password")
 
     uploaded_file = st.file_uploader("Drag & Drop Report Here", type=['pdf'])
+    expected_name = st.text_input(
+        "Expected syndicate (optional)",
+        help="Only used to flag a mismatch if the PDF turns out to be a different "
+             "syndicate. It never overrides what the document says.",
+    )
 
     if uploaded_file and api_key:
         if st.button("🚀 Scan Document", type="primary"):
             with st.spinner("🤖 Claude is reading the report..."):
                 try:
-                    pdf_b64 = base64.standard_b64encode(uploaded_file.read()).decode("utf-8")
-
-                    # Constrain the output to the exact columns Syndicate_Data expects
-                    schema = {
-                        "type": "object",
-                        "properties": {
-                            "Entity_Name": {"type": "string"},
-                            "Owner_Entity": {"type": "string"},
-                            "Manager": {"type": "string"},
-                            "Original_Value": {"type": "number"},
-                            "Current_Value": {"type": "number"},
-                            "Original_Distribution": {"type": "number"},
-                            "Annual_Distribution": {"type": "number"},
-                            "LVR_Percent": {"type": "number"},
-                            "WALT_Years": {"type": "number"},
-                            "Vacancy_Percent": {"type": "number"},
-                            "Distribution_At_Risk": {"type": "string"},
-                            "Capital_Raise": {"type": "number"},
-                            "Capex_Planned": {"type": "number"},
-                            "Expense_Ratio": {"type": "number"},
-                            "Debt_Yield": {"type": "number"},
-                            "CapEx_Reserves": {"type": "number"},
-                            "Loan_Expiry_Year": {"type": "string"},
-                            "Sector": {"type": "string"},
-                            "Interest_Cover": {"type": "number"},
-                        },
-                        "required": ["Entity_Name"],
-                        "additionalProperties": False,
-                    }
-
-                    client = anthropic.Anthropic(api_key=api_key)
-                    response = client.messages.create(
-                        model="claude-haiku-4-5",
-                        max_tokens=4096,
-                        messages=[{
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "document",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "application/pdf",
-                                        "data": pdf_b64,
-                                    },
-                                },
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "This is a property syndicate / fund annual report. "
-                                        "Extract the forensic metrics into the required JSON fields. "
-                                        "Use plain numbers (no $ or % symbols); express percentages as "
-                                        "decimals (e.g. 0.45 for 45%). Omit any field you cannot find."
-                                    ),
-                                },
-                            ],
-                        }],
-                        output_config={"format": {"type": "json_schema", "schema": schema}},
+                    report = extraction.extract_report(
+                        pdf_bytes=uploaded_file.read(),
+                        api_key=api_key,
+                        syndicate_name=expected_name or None,
                     )
-                    text = next(b.text for b in response.content if b.type == "text")
-                    st.session_state['scanned_data'] = json.loads(text)
-                    st.success("✅ Extraction Complete!")
-                except Exception as e:
-                    st.error(f"AI Error: {e}")
+                except extraction.ExtractionError as e:
+                    st.error(f"Extraction failed: {e}")
+                else:
+                    st.session_state['scanned_report'] = report
+                    found, total = extraction.completeness(report)
+                    if found == 0:
+                        st.error(
+                            "Nothing was extracted. The PDF may be image-only or not an "
+                            "investor report."
+                        )
+                    elif found < total / 2:
+                        st.warning(f"⚠️ Only {found} of {total} fields found — check the document.")
+                    else:
+                        st.success(f"✅ Extracted {found} of {total} fields.")
+
+    # --- REVIEW THE EXTRACTION -------------------------------------------------
+    report = st.session_state.get('scanned_report')
+    if report is not None:
+        st.markdown("---")
+        st.subheader("🔍 Review before saving")
+        st.caption(
+            "Every figure is shown with the page it came from. Blank means the document "
+            "did not state it — not zero."
+        )
+
+        rows = []
+        for name in report.__class__.model_fields:
+            field = getattr(report, name)
+            if isinstance(field, extraction.FIGURE_TYPES):
+                rows.append({
+                    "Field": name.replace('_', ' ').title(),
+                    "Value": field.value,
+                    "Page": field.page,
+                    "Source": field.source_text,
+                })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        if report.swap_expiries:
+            st.markdown("**Swap / hedge expiries**")
+            st.dataframe(
+                pd.DataFrame([s.model_dump() for s in report.swap_expiries]),
+                use_container_width=True, hide_index=True,
+            )
+        if report.manager_fees:
+            st.markdown("**Manager fees by category**")
+            st.dataframe(
+                pd.DataFrame([f.model_dump() for f in report.manager_fees]),
+                use_container_width=True, hide_index=True,
+            )
+        if report.extraction_notes:
+            st.info(f"**Extraction notes:** {report.extraction_notes}")
+
+        st.warning(
+            "Saving is wired up in Phase 2, once the per-period storage tabs exist. "
+            "Nothing is written to the sheet yet."
+        )

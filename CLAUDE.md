@@ -11,6 +11,12 @@ Deployed on Streamlit Cloud; also run locally.
 streamlit run Home.py
 ```
 
+Tests (pytest is a dev-only dependency, deliberately not in `requirements.txt`):
+
+```bash
+.venvapp/Scripts/python.exe -m pytest tests/ -q
+```
+
 Requires either a local `credentials.json` (GCP service account, gitignored) **or**
 `.streamlit/secrets.toml` with a `[gcp_service_account]` block. `ANTHROPIC_API_KEY` is
 read from `st.secrets` when present, otherwise the Property Forensics page prompts for
@@ -59,27 +65,21 @@ Bryn's holdings from the parents'.
   2.13.4, streamlit 1.52.2). `.venv`, `.venv312`, and `venv` are stale or broken and
   still carry the old `google-generativeai` dependency from the pre-Claude scanner.
 
-## Current state of the AI extraction (as of 2026-09-11)
+## State of the AI extraction
 
-In `pages/2_🏢_Property_Forensics.py`, tab "Upload Report (AI Scanner)":
+`pages/3_🏢_Property_Forensics.py`, tab "Upload Report (AI Scanner)", now calls
+`modules.extraction.extract_report()` and renders every figure with its page and
+supporting quote for review.
 
-- Model `claude-haiku-4-5`, `messages.create`, `max_tokens=4096`.
-- PDFs **are** passed as a `document` content block (base64 `application/pdf`) — not
-  text-extracted first. This is correct and should be preserved.
-- Output **is** schema-constrained via `output_config={"format": {"type": "json_schema", ...}}`
-  with a hand-written dict schema.
-- The prompt tells the model to *"Omit any field you cannot find"* — omission, not an
-  explicit null, and no page references are requested.
-- No prior-period row and no baseline are passed as context.
-- Single file only (`st.file_uploader` without `accept_multiple_files`).
+**PDFs are passed as a `document` content block and must stay that way** — never
+pre-extract to text. Layout is meaning in these reports: figures sit in tables under
+"Current / Prior / Forecast" headings, and flattening is what makes a model take the
+wrong column.
 
-**Two dead ends to be aware of:**
-1. `save_to_google_sheet()` is defined but **never called** from anywhere.
-2. The scan result is written to `st.session_state['scanned_data']` and **never read**.
-
-So extraction currently runs, costs money, and persists nothing. It also contains an
-unreachable duplicated block (two copies of the append/except logic after an earlier
-`return`).
+**Still outstanding (Phase 2):** `save_to_google_sheet()` writes the *old* flat shape and
+is still never called, so extractions remain unpersisted. The review pane says so
+explicitly rather than implying a save happened. The prior-period row and IM baseline are
+likewise not yet passed anywhere, because there is nowhere to read them from yet.
 
 ## Planned work: quarterly report pipeline
 
@@ -92,18 +92,26 @@ to `3_` to clear the duplicate `2_` prefix; removed the unreachable duplicated b
 `save_to_google_sheet`; centralised sheet keys and credentials in `modules/sheets.py` so
 everything opens by key.
 
-### Phase 1 — Schema-constrained extraction
-`modules/schema.py` holding Pydantic models. Every field carries a value **and** a page
-reference, and is explicitly `null` when absent. The model must never infer, estimate,
-or annualise a figure.
+### Phase 1 — Schema-constrained extraction ✅ done
+`modules/schema.py` holds the Pydantic models; `modules/extraction.py` calls the API;
+`tests/test_schema.py` covers the contract without spending tokens.
 
-Fields: valuation + valuation date, NTA per unit, total debt, facility expiry, LVR, ICR
-actual, ICR covenant, swap/hedge expiries, occupancy, WALE, distribution rate, payout
-ratio, adjusted operating profit vs forecast, cash, manager fees by category.
+- `Figure` / `DateFigure` / `TextFigure` each wrap one value with `page` and a verbatim
+  `source_text`. Native PDF **citations are incompatible with `output_config.format`**
+  (the API returns 400), so provenance is modelled as ordinary schema fields.
+- **No field carries a default.** Pydantic therefore marks all 23 as `required` while
+  still allowing `null`, so the API itself enforces "explicit null, never omitted" —
+  it does not rest on prompt wording. A test asserts this property.
+- Extraction uses `client.messages.parse(output_format=SyndicateReport)`. The SDK's
+  `lib/_parse/_transform.py` handles `$defs`/`$ref` and forces `additionalProperties:
+  false`, so nested models are fine.
+- `claude-opus-5`, adaptive thinking, `effort: high`. Accuracy dominates here: ~30 docs a
+  quarter is low volume, and a wrong figure is worse than a slow one.
+- `completeness()` reports how many figures came back populated — the tell for an
+  image-only PDF or a misfiled document.
 
-Feed `model_json_schema()` into `output_config.format`. Note: native PDF **citations are
-incompatible with `output_config.format`** (the API returns 400), which is why page
-references are modelled as ordinary schema fields the model fills in.
+**Units are pinned in the schema**: percentages whole (45.0 = 45%), ratios as multiples
+(2.5 = 2.5x), WALE in years. Tests guard the ICR case specifically.
 
 ### Phase 2 — Storage
 Two new tabs, written **by header name** rather than by position:
