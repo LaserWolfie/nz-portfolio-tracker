@@ -354,3 +354,34 @@ Rules that matter:
 matches "Building B Graham Street Limited Partnership".
 
 Measured: two real documents, 22s wall clock, ~$1.60.
+
+### Phase 5 — Narrative ✅ done
+
+`modules/narrative.py` drafts a per-syndicate note and manager questions, plus a
+"🔎 Quarterly Review" tab that ranks syndicates and drafts on demand.
+
+**It never sees the PDF.** The document is read once, by the extractor, under a schema.
+`build_facts()` is a pure function that assembles exactly what the writer may see, and it
+is tested directly, so the guarantee does not rest on prompt wording. It excludes:
+
+- `raw_json` and every `source_text` quote — verbatim prose lifted from the document,
+  which would smuggle the PDF back in through the side door;
+- `*_page` columns and the bookkeeping columns.
+
+It includes current figures, prior period, IM baseline, the ranked flags, and a list of
+what was **not disclosed** — because a null is a fact about the manager, not a zero.
+`extraction_notes` is passed as `data_caveats_from_extraction`, labelled so it reads as a
+caveat rather than as more figures.
+
+`unsupported_numbers()` audits the draft: every number written must appear in the facts.
+It is a cheap check for invention, not proof of correctness — a figure can be quoted
+accurately and applied wrongly. Its tokeniser strips thousands separators **first**;
+splitting `$115,000,000` on commas yields `115`, `000`, `000`, which made every large
+figure look invented.
+
+The prompt forbids new arithmetic outright — the delta engine already computed what
+matters — and forbids investment advice.
+
+On the real Augusta row it produced five specific, answerable questions, each with the
+stored figure it rests on, including the rent-reversion and post-refinance-terms questions
+that a human reading 30 reports would be unlikely to reach.

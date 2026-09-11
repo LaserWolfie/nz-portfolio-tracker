@@ -4,7 +4,7 @@ import plotly.express as px
 import altair as alt
 from datetime import datetime
 import os
-from modules import batch, extraction, schema, sheets, storage, utils
+from modules import batch, deltas, extraction, narrative, schema, sheets, storage, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -74,10 +74,11 @@ scenario_label = f"{rate_adjustment:+.2f}% Rates" if rate_adjustment != 0 else "
 st.title("🏢 Property Forensics")
 
 # Create Tabs to separate View vs Input
-tab_dash, tab_upload, tab_batch = st.tabs([
+tab_dash, tab_upload, tab_batch, tab_review = st.tabs([
     "📊 Portfolio Dashboard",
     "📄 Upload Report (AI Scanner)",
     "📦 Batch Intake (Quarter)",
+    "🔎 Quarterly Review",
 ])
 
 # ==========================================
@@ -486,3 +487,107 @@ with tab_batch:
                 saved = sum(1 for i in results if i.status == batch.Status.SAVED)
                 st.success(f"Saved {saved} row(s).")
                 st.session_state['batch_results'] = results
+
+
+# ==========================================
+# TAB 4: FLAGS AND NOTES
+# ==========================================
+with tab_review:
+    st.header("🔎 Quarterly Review")
+    st.markdown(
+        "Ranked by what needs attention. Flags come from stored figures only — no "
+        "document is re-read, so every statement traces back to a saved number."
+    )
+
+    try:
+        review_ss = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
+        period_rows = review_ss.worksheet(storage.PERIODS_WORKSHEET).get_all_records()
+        baseline_rows = storage.load_baseline(
+            review_ss.worksheet(storage.BASELINE_WORKSHEET))
+    except Exception as e:
+        st.error(f"Could not read the storage tabs: {e}")
+        period_rows, baseline_rows, review_ss = [], [], None
+
+    if not period_rows:
+        st.info(
+            f"{storage.PERIODS_WORKSHEET} is empty. Extract and save some reports first."
+        )
+    else:
+        baseline_by_id = {str(b.get('syndicate_id')): b for b in baseline_rows}
+        reviews = deltas.review_all(period_rows, baseline_rows)
+        attention = [r for r in reviews if r.needs_attention]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Syndicates stored", len(reviews))
+        c2.metric("Needing attention", len(attention))
+        c3.metric("Flags raised", sum(len(r.flags) for r in reviews))
+
+        severity_icon = {
+            "CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "INFO": "⚪",
+        }
+
+        for review in reviews:
+            name = baseline_by_id.get(review.syndicate_id, {}).get(
+                'canonical_name', review.syndicate_id)
+            icon = severity_icon.get(str(review.worst), "⚪")
+            label = f"{icon} {name} — {review.period_end} ({len(review.flags)} flag(s))"
+
+            with st.expander(label, expanded=review.needs_attention):
+                for f in review.flags:
+                    line = f"{severity_icon.get(str(f.severity), '')} **{f.severity}** — {f.message}"
+                    if f.severity >= deltas.Severity.HIGH:
+                        st.error(line)
+                    elif f.severity == deltas.Severity.MEDIUM:
+                        st.warning(line)
+                    else:
+                        st.info(line)
+                if not review.flags:
+                    st.success("No flags this period.")
+
+                row = next((r for r in period_rows
+                            if str(r.get('syndicate_id')) == review.syndicate_id
+                            and str(r.get('period_end')) == review.period_end), None)
+
+                key = f"note_{review.syndicate_id}_{review.period_end}"
+                if st.button("✍️ Draft note and manager questions", key=f"btn_{key}"):
+                    if not have_credentials:
+                        st.error("Set ANTHROPIC_API_KEY to draft notes.")
+                    else:
+                        with st.spinner("Writing from the stored figures…"):
+                            try:
+                                st.session_state[key] = narrative.write_narrative(
+                                    row,
+                                    review.flags,
+                                    deltas.prior_period(period_rows, review.syndicate_id,
+                                                        review.period_end),
+                                    baseline_by_id.get(review.syndicate_id),
+                                    api_key=api_key,
+                                )
+                            except Exception as e:
+                                st.error(f"Could not draft the note: {e}")
+
+                note = st.session_state.get(key)
+                if note:
+                    st.markdown(f"**{note.headline}**")
+                    st.write(note.note)
+                    if note.questions:
+                        st.markdown("**Questions for the manager**")
+                        for i, q in enumerate(note.questions, 1):
+                            st.write(f"{i}. {q.question}")
+                            st.caption(f"basis: {q.basis}")
+                    if note.data_gaps:
+                        st.caption("Not disclosed: " + "; ".join(note.data_gaps))
+
+                    facts = narrative.build_facts(
+                        row, review.flags,
+                        deltas.prior_period(period_rows, review.syndicate_id,
+                                            review.period_end),
+                        baseline_by_id.get(review.syndicate_id))
+                    stray = narrative.unsupported_numbers(note, facts)
+                    if stray:
+                        st.error(
+                            "These numbers do not appear in the stored figures and may be "
+                            f"invented: {', '.join(stray)}"
+                        )
+                    else:
+                        st.caption("✅ Every figure quoted traces back to a stored value.")
