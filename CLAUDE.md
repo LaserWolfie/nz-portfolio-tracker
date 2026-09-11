@@ -276,3 +276,46 @@ module reads one mechanism rather than two.
   or CPI", i.e. independently of performance.
 - `related_party_transactions` — recorded as a statement, so an explicit "there were
   none" stays distinguishable from silence.
+
+### Syndicate identity
+
+`Syndicate_Baseline` was seeded by `scripts/scaffold_baseline.py` (dry-run by default,
+`--write` to apply; re-runnable, only ever appends). 34 rows.
+
+**`Syndicate_Data` is one row per HOLDING, not per syndicate.** The same syndicate appears
+once per family entity that owns units in it, so "33 Broadway Trust", "St George Group"
+and "Merx Wholeale Pie Trust 1" each appear twice. 36 holding rows collapse to 33
+syndicates. Baseline is per syndicate, because LVR, cap rate and WALE are properties of
+the syndicate; `owner_entity` holds the pipe-separated list of holders.
+
+`syndicate_id` is `MANAGER-DISTINCTIVE`, e.g. `CENT-PENROSE`, `PMG-GENERATION`. Two
+lessons are baked into `make_id()` and guarded by tests:
+
+- **The manager belongs in the id.** Stripping it collapsed "Centuria Industrial Fund"
+  and "Jasper Industrial Income Plus Fund" onto the same code.
+- **A lone letter or digit is often the only distinguishing token** — Building A vs B,
+  Govt Income 1 vs 2. Dropping it left the ids separated only by a collision suffix whose
+  value depends on row order, and so was not stable.
+
+The script **never merges two names on a guess**; look-alikes are reported for a human to
+confirm. Outstanding pairs to resolve by hand:
+
+- `Building B Graham Street Limited Partnership` vs `Graham St "B"` — probably the same
+  syndicate held by two entities (Cambridge, Group Reality).
+- `William St Nominees (Cedenco)` vs `Williams Street Nominees Joint Venture` — probably
+  the same.
+- `E+O Heathcare Fund` / `E+O N.Z. Daycare Fund` / `NZ Daycare Properties Fund LP` — check
+  whether the last two are one fund.
+- `SGB` (Augusta St Georges Bay Road) vs `CENT-STGEORGE` (St George Group) — related
+  names, possibly unrelated syndicates.
+
+To merge, delete the surplus row and add its name to the survivor's `aliases`.
+
+**Two syndicates have documents but no holding row**: "Sir William Pickering Drive
+Limited Partnership" and "Westpoint Property Scheme" appear in Drive and Downloads but not
+in `Syndicate_Data`, so they resolve to no match. Either add them or confirm they are
+sold.
+
+Typos in `Syndicate_Data` are preserved as canonical ("Wholeale", "Heathcare", "Eskine &
+Owen" for Erskine & Owen) — it is the system of record, so aliases absorb the variance
+rather than the source being silently corrected.
