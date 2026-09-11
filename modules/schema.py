@@ -90,14 +90,26 @@ class SwapExpiry(BaseModel):
 
 
 class ManagerFee(BaseModel):
-    """One line of manager remuneration, as categorised by the report itself."""
+    """One line of manager remuneration, as categorised by the report itself.
+
+    Fees are commonly disclosed as a percentage of scheme property rather than as
+    a dollar amount, and sometimes as both. Record whichever the report gives and
+    null the other -- never convert between them.
+    """
 
     category: str = Field(
         description="Fee category exactly as the report labels it, e.g. "
-        "'Management fee', 'Leasing fee', 'Accounting fee'. Do not invent categories "
-        "or merge lines that the report presents separately."
+        "'Scheme management fees', 'Property management fees', 'Supervisor fees'. "
+        "Do not invent categories or merge lines the report presents separately."
     )
-    amount: float | None = Field(description="Dollar amount for the period. Null if not stated.")
+    amount: float | None = Field(
+        description="Dollar amount for the period, if the report states one. "
+        "Null if the fee is only given as a percentage."
+    )
+    percent_of_scheme_property: float | None = Field(
+        description="The fee as a whole percent of scheme property, e.g. 0.42 for 0.42%, "
+        "if the report states one. Null if the fee is only given in dollars."
+    )
     page: int | None = Field(description="1-based PDF page number.")
 
 
@@ -131,7 +143,9 @@ class SyndicateReport(BaseModel):
         "the period end date."
     )
     nta_per_unit: Figure = Field(
-        description="Net tangible assets per unit, in dollars per unit."
+        description="Net tangible assets per unit, in dollars per unit. Commonly labelled "
+        "'Net assets per unit' or 'NAV per unit'. Take the precise figure from the financial "
+        "statements or key information summary, not a rounded headline like '$45K'."
     )
     cash: Figure = Field(description="Cash and cash equivalents held, in dollars.")
 
@@ -151,7 +165,10 @@ class SyndicateReport(BaseModel):
     )
     icr_covenant: Figure = Field(
         description="The bank covenant threshold for interest coverage, as a multiple. "
-        "This is the minimum the syndicate must maintain, not the achieved figure."
+        "This is the minimum the syndicate must maintain, not the achieved figure. "
+        "Beware: the word 'covenant' also appears in supervisor company names such as "
+        "'Covenant Trustee Services Limited', which has nothing to do with banking "
+        "covenants. Many reports disclose no ICR covenant at all -- record null."
     )
     swap_expiries: list[SwapExpiry] = Field(
         description="Every interest rate swap or hedge tranche disclosed. Empty list if "
@@ -171,7 +188,11 @@ class SyndicateReport(BaseModel):
 
     # --- Distributions ---------------------------------------------------------
     distribution_rate: Figure = Field(
-        description="The distribution rate for this period as printed."
+        description="The distribution rate for this period as printed. Reports often "
+        "carry TWO different rates -- an 'average distribution rate' expressed on the "
+        "original investment, and a 'distribution yield' expressed on closing equity. "
+        "They are both correct and they differ. Take the 'average distribution rate' on "
+        "original investment where both appear, and say so in extraction_notes."
     )
     distribution_unit: DistributionUnit = Field(
         description="Which convention the distribution rate above uses. Use 'unknown' "
@@ -184,8 +205,12 @@ class SyndicateReport(BaseModel):
 
     # --- Earnings ----------------------------------------------------------------
     adjusted_operating_profit: Figure = Field(
-        description="Adjusted operating profit (AOP), or the report's nearest equivalent "
-        "such as distributable profit, for the period, in dollars."
+        description="Adjusted operating profit (AOP) for the period, in dollars. Managers "
+        "label this differently: 'adjusted net profit', 'distributable profit' and "
+        "'adjusted funds from operations' are the same concept, and it is the figure "
+        "arrived at after adjusting net profit for fair value movements and other non-cash "
+        "items. It is NOT the same as 'operating profit' or 'net profit' -- if only those "
+        "are given and no adjusted figure is reconciled, record null."
     )
     adjusted_operating_profit_forecast: Figure = Field(
         description="The forecast or budgeted AOP for the same period, in dollars, where "
@@ -241,6 +266,22 @@ Rules:
 6. If the same metric appears more than once on different bases (for example a
    consolidated and a look-through LVR), take the one the report presents as the headline
    figure and describe the ambiguity in `extraction_notes`.
+
+7. The manager's letter and the key information summary routinely round: a letter saying
+   "an LVR of 47%" and a summary tile reading "46.52%" are the same metric. Always record
+   the more precise figure, and prefer the key information summary and the financial
+   statements over prose. Note the discrepancy only if the two genuinely disagree rather
+   than merely round.
+
+8. Figures are not always labelled. Facility maturity in particular is often stated only
+   in narrative commentary - for example "reflecting its maturity on 30 September 2026"
+   inside a paragraph about reclassifying the loan to current liabilities. Read the
+   commentary, not just the tables.
+
+9. The key information summary is usually a grid of visual tiles rather than a table.
+   Match each number to the tile it sits in, using the tile's own caption and footnote
+   marker. Do not pair a number with a caption just because they are adjacent in reading
+   order.
 """
 
 

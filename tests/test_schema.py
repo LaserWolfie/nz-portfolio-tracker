@@ -106,6 +106,67 @@ class TestProvenance:
         assert "1,250,000" in figure.source_text
 
 
+class TestManagerFees:
+    """Shaped after the Augusta FY2026 report, which gives fees as percentages."""
+
+    def test_fee_given_only_as_a_percentage(self):
+        report = SyndicateReport.model_validate(
+            _minimal_payload(
+                manager_fees=[
+                    {
+                        "category": "Scheme management fees",
+                        "amount": None,
+                        "percent_of_scheme_property": 0.42,
+                        "page": 12,
+                    }
+                ]
+            )
+        )
+        fee = report.manager_fees[0]
+        assert fee.percent_of_scheme_property == 0.42
+        assert fee.amount is None, "a percentage must not be coerced into a dollar amount"
+
+    def test_fee_given_only_in_dollars(self):
+        report = SyndicateReport.model_validate(
+            _minimal_payload(
+                manager_fees=[
+                    {
+                        "category": "Audit and assurance fees",
+                        "amount": 12400.0,
+                        "percent_of_scheme_property": None,
+                        "page": 12,
+                    }
+                ]
+            )
+        )
+        assert report.manager_fees[0].amount == 12400.0
+
+    def test_no_fees_disclosed_is_an_empty_list(self):
+        report = SyndicateReport.model_validate(_minimal_payload())
+        assert report.manager_fees == []
+
+
+class TestDistributionAmbiguity:
+    """Augusta reports 6.75% on original investment AND 7.43% on closing equity."""
+
+    def test_unit_is_recorded_alongside_the_rate(self):
+        report = SyndicateReport.model_validate(
+            _minimal_payload(
+                distribution_rate=_figure(6.75),
+                distribution_unit="percent_per_annum_on_subscription_price",
+            )
+        )
+        assert report.distribution_rate.value == 6.75
+        assert report.distribution_unit.value == "percent_per_annum_on_subscription_price"
+
+    def test_unknown_basis_is_expressible(self):
+        """Better an explicit 'unknown' than a guessed basis."""
+        report = SyndicateReport.model_validate(
+            _minimal_payload(distribution_rate=_figure(7.0), distribution_unit="unknown")
+        )
+        assert report.distribution_unit.value == "unknown"
+
+
 class TestCompleteness:
     def test_empty_report_scores_zero(self):
         report = SyndicateReport.model_validate(_minimal_payload())
