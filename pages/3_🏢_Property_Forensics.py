@@ -5,10 +5,8 @@ import altair as alt
 from datetime import datetime
 import anthropic
 import base64
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
-from modules import utils
+from modules import sheets, utils
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Property Forensics", page_icon="🏢", layout="wide")
@@ -31,21 +29,9 @@ def clean_percent(x):
 def save_to_google_sheet(data_dict):
     """Writes the extracted data to the Google Sheet with EXACT column mapping."""
     try:
-        # Load Google Sheets Credentials
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
-        if "gcp_service_account" in st.secrets:
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
-        else:
-            creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-        
-        client = gspread.authorize(creds)
-        
-        # --- THE FIX: Correct File and Tab Name ---
-        # We use "Proportional Property" (File) and "Syndicate_Data" (Tab)
-        sheet = client.open("Proportional Property").worksheet("Syndicate_Data")
-        
-# --- DYNAMIC ROW MAPPING (Fixed to prevent $0 values) ---
+        sheet = sheets.open_property_worksheet()
+
+        # --- DYNAMIC ROW MAPPING (Fixed to prevent $0 values) ---
         row = [
             data_dict.get('Entity_Name', ''),           # A
             data_dict.get('Owner_Entity', 'Other'),     # B
@@ -79,30 +65,8 @@ def save_to_google_sheet(data_dict):
             # If Google sends a "200 OK" but the old library thinks it's an error
             if "200" in str(e):
                 return True
-            else:
-                raise e
+            raise
 
-    except Exception as e:
-        st.error(f"Save Error: {e}")
-        return False
-        
-        # --- SAFETY SAVE ---
-        try:
-            sheet.append_row(row)
-            return True
-        except Exception as e:
-            # If Google sends a "200 OK" but the old library thinks it's an error
-            if "200" in str(e):
-                return True
-            else:
-                raise e
-
-    except Exception as e:
-        st.error(f"Save Error: {e}")
-        return False
-        
-        sheet.append_row(row)
-        return True
     except Exception as e:
         st.error(f"Save Error: {e}")
         return False

@@ -1,23 +1,14 @@
 import streamlit as st
 import os
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from modules import sheets
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="NZ Wealth Manager Pro", page_icon="💰", layout="wide")
 
 # --- 2. CONNECTION ENGINE ---
-@st.cache_resource
-def init_connection():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    if os.path.exists("credentials.json"):
-        return ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-    elif "gcp_service_account" in st.secrets:
-        return ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
-    else:
-        st.error("🚨 Connection Failed: No credentials found.")
-        st.stop()
+# Credentials and sheet keys live in modules/sheets.py so every page opens the
+# same spreadsheet the same way.
 
 def robust_numeric_clean(df, column_name):
     """Safely converts a spreadsheet column to numbers, handling symbols and errors."""
@@ -35,22 +26,15 @@ def robust_numeric_clean(df, column_name):
 @st.cache_data(ttl=600)
 def load_data_from_sheet():
     try:
-        creds = init_connection()
-        client = gspread.authorize(creds)
-        
         # --- SHARE PORTFOLIO ---
-        STOCKS_ID = "1_Fj4lKv2esBxwwVn-ALfHNJp3OGNUChe8lQ5zfMkzD0"
-        sheet1 = client.open_by_key(STOCKS_ID)
-        s_values = sheet1.worksheet("Clean_Stocks").get_all_values()
+        s_values = sheets.open_stocks_worksheet().get_all_values()
         stock_headers = [str(h).strip() for h in s_values[0]]
         stock_df = pd.DataFrame(s_values[1:], columns=stock_headers)
         if 'Value' in stock_df.columns:
             stock_df = robust_numeric_clean(stock_df, 'Value')
-        
+
         # --- PROPORTIONAL PROPERTY ---
-        PROPERTY_ID = "142q0VXqiC6RWSjcS67BGR_ROVLYFtl61QgmRrYhoUkQ"
-        sheet2 = client.open_by_key(PROPERTY_ID) 
-        p_values = sheet2.worksheet("Syndicate_Data").get_all_values()
+        p_values = sheets.open_property_worksheet().get_all_values()
         prop_headers = [str(h).strip() for h in p_values[0]]
         prop_df = pd.DataFrame(p_values[1:], columns=prop_headers)
         

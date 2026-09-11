@@ -39,6 +39,7 @@ platformdirs==4.5.1
 plotly==6.5.1
 protobuf>=4.21.6,<6
 pyarrow==22.0.0
+pydantic==2.13.4
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.23
@@ -64,4 +65,4 @@ urllib3==2.6.3
 watchdog==6.0.0
 websockets==16.0
 yfinance==1.0
-anthropic
+anthropic==0.115.0

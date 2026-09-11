@@ -1,4 +1,8 @@
 venv/
+.venv/
+.venv312/
+.venvapp/
 credentials.json
 .streamlit/secrets.toml
 __pycache__/
+.pytest_cache/
