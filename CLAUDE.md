@@ -656,3 +656,29 @@ check working, not failing.
   likely Australian Centuria funds, consistent with Grenfell St and Centuria Industrial Fund.
 - `PMG-PRESTONROAD` — PMG has only five schemes on Disclose and Preston Road is not among
   them. Likely a property held *inside* a PMG fund rather than a scheme in its own right.
+
+### Final coverage: three registers swept
+
+| Register | Holds | Use |
+|---|---|---|
+| **Disclose** `disclose-register.companiesoffice.govt.nz` | Annual financial statements, trust deed, SIPO | **12 syndicates** |
+| **Companies** `app.companiesoffice.govt.nz` | Annual financial statements, for companies required to file | **2 syndicates** (Penrose FY22–26, Agricultural FY24–26) |
+| **Limited Partnerships** `lp-register.companiesoffice.govt.nz` | **Annual returns only — no financial statements** | Identity and status only |
+
+The LP register was checked directly: `NZ DAYCARE PROPERTIES FUND LP` (50065049) lists five
+annual returns and its registration, and nothing else. **LPs and trusts are a dead end for
+documents** — they confirm an entity exists but file no accounts publicly. Do not spend more
+time there.
+
+**14 of 30 syndicates have documents obtainable from public sources.** The remaining 16 must
+come from the manager — Centuria's login, or email:
+
+- *Australian, outside the NZ regime*: Centuria Industrial Fund (ASX), Centuria Grenfell St
+  (Adelaide), Jasper Warrawong Plaza (NSW), and probably Centuria Govt Income 1 and 2.
+- *NZ but privately reported*: E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical, Jasper
+  Industrial, MP Innovation, Merx, Ohanga, Surplus Brokers, PMG Preston Road.
+- *Cancelled*: PMG Generation Fund — historic filings may still sit on Disclose under
+  SCH12827.
+
+That is the ceiling for free document collection. Benchmarking across the full 30 is not
+achievable from public sources alone; benchmarking across the ~14 is.
