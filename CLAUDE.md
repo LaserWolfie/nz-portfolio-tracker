@@ -620,3 +620,39 @@ alias list exists to absorb.
 **What this means for document coverage.** The register supplies annual reports for the 12
 Registered schemes, which together with Drive gets most of the way. The remaining ~17 have
 to come from the manager directly — Centuria's login, or email.
+
+### The Companies Register is a second public source
+
+Chasing the five unresolved names turned up a source the Disclose Register does not cover.
+`app.companiesoffice.govt.nz` — public, no login — and **NZ companies file their annual
+financial statements there**:
+
+| Entity | Number | Financial statements filed |
+|---|---|---|
+| `CENTURIA PENROSE LIMITED` | 8149464 | FY2022, FY2023, FY2024, FY2025, FY2026 (1.4–1.9MB each) |
+| `CENTURIA NZ AGRICULTURAL PROPERTY FUND LIMITED` | 8616868 | FY2024, FY2025, FY2026 |
+
+So a holding being a **company rather than a scheme is not a dead end** — it just files in a
+different place. Both of these were previously marked "not on the register"; both in fact
+have five and three years of statements respectively.
+
+**This likely extends much further.** Limited partnerships have their own public register
+too, so `IDEAL Electrical - Montreal`, `MP Innovation`, the Jasper and Erskine & Owen
+vehicles and others may all be reachable. Worth checking entity by entity before concluding
+any holding is undocumentable.
+
+Two caveats on what these documents contain. Company financial statements are **statutory
+accounts**, not investor reports: expect valuation, debt and covenant notes, but not the
+key-information-summary tiles (LVR, WALE, cap rate as headline figures) that the schema was
+built around. Extraction will be **thinner and may trip `SPARSE_THRESHOLD`** — that is the
+check working, not failing.
+
+### The remaining four
+
+- `CENT-VICKYSTREET` — not on Disclose. `VICKERS ROAD PROPERTY SCHEME` (SCH11556, Centuria,
+  Registered) is a **possible** match but the names genuinely differ (Vickers Road vs Vicky
+  Street, Property Scheme vs Nominees JV). **Confirm before linking.**
+- `CENT-GOVT1`, `CENT-GOVT2` — nothing on Disclose under Centuria or "Government". Most
+  likely Australian Centuria funds, consistent with Grenfell St and Centuria Industrial Fund.
+- `PMG-PRESTONROAD` — PMG has only five schemes on Disclose and Preston Road is not among
+  them. Likely a property held *inside* a PMG fund rather than a scheme in its own right.
