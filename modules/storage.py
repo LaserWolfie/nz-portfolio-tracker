@@ -24,6 +24,7 @@ from modules.schema import SyndicateReport, figure_names, iter_figures
 
 PERIODS_WORKSHEET = "Syndicate_Periods"
 BASELINE_WORKSHEET = "Syndicate_Baseline"
+INDUSTRY_WORKSHEET = "Industry_Benchmarks"
 
 ALIAS_SEPARATOR = "|"
 
@@ -73,6 +74,25 @@ BASELINE_COLUMNS = [
     "lvr_covenant_threshold",
     "trust_deed_notes",
     "notes",
+]
+
+
+#: External reference series -- listed NZ property vehicles and valuer sector
+#: data -- keyed by (metric, sector, period_end, source). Provenance is not
+#: optional: a benchmark whose source and basis are unknown cannot be defended
+#: when a manager disputes it, which is exactly when it will be used.
+INDUSTRY_COLUMNS = [
+    "metric",          # a key from benchmarks.METRICS, so comparison is mechanical
+    "sector",          # must match the syndicate's sector, or "All"
+    "region",          # optional; "NZ" when not region-specific
+    "period_end",      # what date the figure describes
+    "value",
+    "unit",
+    "source",          # who published it
+    "source_type",     # listed_vehicle | valuer | index | other
+    "basis_notes",     # HOW it is measured -- the comparability test
+    "url",
+    "entered_at",
 ]
 
 
@@ -293,6 +313,7 @@ def ensure_worksheets(spreadsheet=None) -> dict:
     for title, columns in (
         (PERIODS_WORKSHEET, period_columns()),
         (BASELINE_WORKSHEET, BASELINE_COLUMNS),
+        (INDUSTRY_WORKSHEET, INDUSTRY_COLUMNS),
     ):
         if title not in existing:
             worksheet = spreadsheet.add_worksheet(

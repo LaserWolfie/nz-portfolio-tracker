@@ -931,3 +931,57 @@ SGB's SIPO qualifies its 7% as applying "until 31 March 2020". A regex over the 
 that; the schema caught it in `cash_return_basis`. **Check the basis before treating any
 gap as a shortfall** — several of these promises are dated, and the SIPOs themselves are
 from 2019–2025.
+
+## Industry_Benchmarks ✅ built (empty by design)
+
+`modules/industry.py` plus an `Industry_Benchmarks` tab. Both external sources — listed NZ
+vehicles and valuer sector series — land in one tab keyed by
+**(metric, sector, period_end, source)**, so the module reads one mechanism rather than two.
+
+| Column | Purpose |
+|---|---|
+| `metric` | must be a key from `benchmarks.METRICS`, so comparison is mechanical |
+| `sector` | must match the syndicate's sector, or be `All` |
+| `region`, `period_end`, `value`, `unit` | the figure itself |
+| `source`, `source_type` | `listed_vehicle` / `valuer` / `index` / `other` |
+| `basis_notes` | **how it is measured** — the comparability test |
+| `url`, `entered_at` | audit trail |
+
+**The tab is deliberately empty.** Seeding it with unverified numbers would be worse than
+leaving it blank: a benchmark gets used in an argument with a manager, and that is exactly
+when an unsourced figure becomes worthless. Rows must be entered from a source that can be
+cited.
+
+Two of the three rules are refusals, and `parse_benchmarks()` drops any row that breaks
+them rather than using it:
+
+- **No cross-sector comparison.** An Office cap rate says nothing about a childcare centre.
+  A sector-specific benchmark beats an `All` one where both exist.
+- **No comparison without a stated basis.** A listed REIT's gearing is measured on total
+  assets; a single-asset syndicate's LVR is not the same number. `basis_notes` is required
+  and travels into every `Comparison` so the reader sees how the figure was built.
+- **No hindsight.** A benchmark dated after the period being judged is not applied.
+
+`coverage()` answers "how well can we benchmark this?" *before* any conclusion is drawn
+from a thin reference set.
+
+### What to collect, and for which sectors
+
+The FY2026 cohort is Office 4, Industrial 3, Diversified 1, Commercial Property 1,
+Agriculture 1. Metrics measurable across the cohort, so worth finding a benchmark for:
+
+| Metric | Measurable | Best external source |
+|---|---|---|
+| `lvr_percent`, `payout_ratio_percent`, `wale_years`, `cash` | 10 of 10 | listed vehicles |
+| `capitalisation_rate_percent` | 9 | valuer sector series (CBRE/Colliers/JLL) |
+| `manager_fee_total_percent` | 8 | listed vehicles' management expense ratios |
+| `capex_spent` | 7 | listed vehicles |
+| `rent_reversion_percent` | 6 | valuer market rent series |
+| `vacancy_percent` | 5 | valuer sector vacancy |
+| `icr_actual`, `occupancy_percent` | 4, 3 | thin — the disclosure gap bites here |
+
+Listed comparators: Precinct, Argosy, Goodman, Kiwi Property, Property for Industry. All
+publish semi-annually, and **all file on the NZX** rather than the Disclose Register.
+
+Note `icr_actual` is measurable for only 4 of 10 and `occupancy_percent` for 3. Benchmarks
+cannot fix a disclosure gap — those stay questions for the managers.
