@@ -58,10 +58,22 @@ with tab_intake:
             st.dataframe(
                 pd.DataFrame([{
                     "File": i.filename,
+                    "Kind": i.kind,
                     "Matched syndicate": i.syndicate_id or "— will use the document —",
                 } for i in plan]),
                 use_container_width=True, hide_index=True,
             )
+
+            admin = [i for i in plan if i.kind == "administrative"]
+            skip_admin = True
+            if admin:
+                skip_admin = st.checkbox(
+                    f"Skip {len(admin)} administrative document(s) — proxy forms, meeting "
+                    "notices, disclosure statements. They carry no periodic figures and "
+                    "cost the same to extract as a full report.",
+                    value=True,
+                )
+            plan = batch.worth_extracting(plan) if skip_admin else plan
             if unmatched:
                 st.warning(
                     f"{len(unmatched)} file(s) did not match on filename. They will still "
@@ -69,15 +81,16 @@ with tab_intake:
                     "and usually resolves them."
                 )
             st.caption(
-                f"{len(plan)} document(s). Estimated extraction cost "
+                f"**{len(plan)} document(s) will be extracted.** Estimated cost "
                 f"**~${batch.estimated_cost(plan):.2f}** at {extraction.DEFAULT_MODEL} rates. "
                 "Matching above was free."
             )
 
             st.subheader("2. Extract")
-            if st.button(f"🚀 Extract {len(plan)} document(s)", type="primary"):
+            wanted = {i.filename for i in plan}
+            if plan and st.button(f"🚀 Extract {len(plan)} document(s)", type="primary"):
                 progress = st.progress(0.0, text="Starting…")
-                documents = {f.name: f.read() for f in uploads}
+                documents = {f.name: f.read() for f in uploads if f.name in wanted}
 
                 def _tick(done, total, item):
                     progress.progress(done / total, text=f"{done}/{total} — {item.filename}")

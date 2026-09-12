@@ -460,3 +460,31 @@ matters — and forbids investment advice.
 On the real Augusta row it produced five specific, answerable questions, each with the
 stored figure it rests on, including the rent-reversion and post-refinance-terms questions
 that a human reading 30 reports would be unlikely to reach.
+
+### What the Drive documents actually look like
+
+Checked 28 real filenames from the per-syndicate Drive folders against the baseline. Two
+findings changed the design.
+
+**The reporting cycle is half-yearly, not quarterly.** Managers issue a
+`Biannual Report` at **31 March** and **30 September**, plus an `FY Annual Report`. The
+page is still called Quarterly Review, but expect two periods a year per syndicate.
+`biannual` is in the filename noise list for that reason.
+
+**Half the documents are not reports.** Of 28 files: 9 periodic reports, 5 supporting
+(valuation updates), and **14 administrative** — proxy voting forms, meeting notices,
+product disclosure statements, governing documents, SIPOs, meeting presentations. A proxy
+form costs the same to extract as an annual report and yields nothing, so
+`document_kind()` classifies on the filename and the intake tab skips administrative
+documents by default. On that sample it halves the bill, $22.40 → $11.20.
+
+Matching went 21/28 → **25/28** after adding aliases (`Sir William Pickering`,
+`33 Broadway`, `Birch Ave`/`Birch Nominees` for `CENT-CARTERSBIRCH` — another
+tenant-vs-property name) and expanding the noise list. The three remaining misses are all
+correct: `Product_Disclosure_Statement.pdf` and `Governing_Document.pdf` contain no
+syndicate name at all (the document's own entity name resolves those during extraction),
+and Westpoint is sold.
+
+Drive is organised as one folder per company, each holding one folder per syndicate. Note
+`St Georges Bay Road` and `Augusta St Georges Bay Road` are separate folders for the same
+syndicate — both resolve to `SGB`.

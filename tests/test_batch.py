@@ -49,6 +49,46 @@ class TestFilenameReading:
         assert name_from_filename(r"C:\reports\PMG Generation Fund.pdf") == "PMG Generation Fund"
 
 
+class TestDocumentKind:
+    """Sampled from the real Drive folders: half the documents are not reports."""
+
+    @pytest.mark.parametrize("filename", [
+        "Sir-William-Pickering-Dr-Biannual-Report-30-September-2025.pdf",
+        "33-Broadway-FY2025-Annual-Report.pdf",
+        "Augusta-St-Georges-Bay-Rd-Biannual-Report-31-March-2025.pdf",
+    ])
+    def test_periodic_reports(self, filename):
+        assert batch.document_kind(filename) == "report"
+
+    @pytest.mark.parametrize("filename", [
+        "Birch Ave - Proxy Voting Form.pdf",
+        "Sir-William-Pickering-Dr-Notice-of-Special-Meeting-2025.pdf",
+        "33-Broadway-Product-Disclosure-Statement.pdf",
+        "Governing_Document.pdf",
+        "SIPO_Sir_William_Pickering_Drive_Limited_Partnership.pdf",
+        "33-Broadway-Trust-Annual-Meeting-Presentation-2025.pdf",
+    ])
+    def test_administrative_documents(self, filename):
+        assert batch.document_kind(filename) == "administrative"
+
+    def test_valuation_update_is_supporting_not_administrative(self):
+        """It carries a real valuation, so it is not skipped by default."""
+        assert batch.document_kind("33-Broadway-Valuation-Update-April-2025.pdf") == "supporting"
+
+    def test_administrative_documents_are_excluded_from_a_run(self):
+        items = plan_batch([
+            "33-Broadway-FY2025-Annual-Report.pdf",
+            "Birch Ave - Proxy Voting Form.pdf",
+        ], BASELINE)
+        kept = batch.worth_extracting(items)
+        assert [i.filename for i in kept] == ["33-Broadway-FY2025-Annual-Report.pdf"]
+
+    def test_biannual_is_stripped_when_matching(self):
+        """NZ syndicates report half-yearly, so 'Biannual' is on most reports."""
+        assert "Biannual" not in name_from_filename(
+            "33-Broadway-Biannual-Report-30-September-2025.pdf")
+
+
 class TestPlanning:
     def test_matches_without_calling_the_api(self):
         items = plan_batch(["Centuria Govt Income 1 Annual Report 2026.pdf"], BASELINE)

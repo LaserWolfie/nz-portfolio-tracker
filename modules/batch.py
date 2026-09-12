@@ -61,6 +61,7 @@ class BatchItem:
 
     filename: str
     status: str = Status.PENDING
+    kind: str = "supporting"
     syndicate_id: str | None = None
     filename_match: str | None = None
     extracted_match: str | None = None
@@ -89,9 +90,16 @@ def name_from_filename(filename: str) -> str:
     stem = os.path.splitext(os.path.basename(filename))[0]
     text = stem.replace("_", " ").replace("-", " ")
     noise = {
-        "annual", "report", "quarterly", "quarter", "update", "interim",
-        "financial", "statements", "statement", "investor", "final", "draft",
-        "signed", "copy", "valuation", "tax", "holding", "holdings",
+        # Report types. "biannual" matters: NZ syndicates report half-yearly at
+        # 31 March and 30 September, so it appears on most periodic reports.
+        "annual", "biannual", "half", "yearly", "report", "quarterly", "quarter",
+        "update", "interim", "financial", "statements", "statement", "investor",
+        "valuation", "tax", "holding", "holdings",
+        # Document furniture.
+        "notice", "meeting", "special", "presentation", "proxy", "voting",
+        "form", "cover", "letter", "disclosure", "product", "governing",
+        "document", "sipo", "minutes", "booklet",
+        "final", "draft", "signed", "copy", "v1", "v2", "v3",
         "fy", "q1", "q2", "q3", "q4",
         "january", "february", "march", "april", "may", "june", "july",
         "august", "september", "october", "november", "december",
@@ -110,6 +118,39 @@ def name_from_filename(filename: str) -> str:
     return " ".join(words).strip()
 
 
+#: Filename markers for documents that carry no periodic figures. Extracting a
+#: proxy voting form costs the same as extracting an annual report and yields
+#: nothing, so they are flagged before any money is spent rather than after.
+ADMINISTRATIVE_MARKERS = (
+    "proxy", "voting form", "notice of", "product disclosure", "governing document",
+    "sipo", "presentation", "minutes", "certificate", "cover letter",
+    "resolution has passed", "campaign has closed",
+)
+
+#: Markers for the periodic reports the pipeline exists to read.
+REPORT_MARKERS = (
+    "annual report", "biannual report", "interim report", "quarterly report",
+    "half year", "financial statements", "biannual",
+)
+
+
+def document_kind(filename: str) -> str:
+    """Guess from the filename alone whether this is worth extracting.
+
+    'report'         -- a periodic investor report.
+    'administrative' -- proxy forms, meeting notices, PDSs, governing documents.
+    'supporting'     -- everything else: valuation updates, tax statements and
+                        the like, which carry some figures but not a full period.
+    """
+    text = os.path.splitext(os.path.basename(filename))[0]
+    text = text.replace("_", " ").replace("-", " ").lower()
+    if any(marker in text for marker in REPORT_MARKERS):
+        return "report"
+    if any(marker in text for marker in ADMINISTRATIVE_MARKERS):
+        return "administrative"
+    return "supporting"
+
+
 def plan_batch(filenames: list[str], baseline_rows: list[dict]) -> list[BatchItem]:
     """Match filenames to syndicates without calling the API.
 
@@ -119,6 +160,12 @@ def plan_batch(filenames: list[str], baseline_rows: list[dict]) -> list[BatchIte
     items = []
     for filename in filenames:
         item = BatchItem(filename=filename)
+        item.kind = document_kind(filename)
+        if item.kind == "administrative":
+            item.notes.append(
+                "Looks administrative (proxy form, meeting notice, disclosure "
+                "statement). Probably carries no periodic figures."
+            )
         item.filename_match = resolve_syndicate_id(
             name_from_filename(filename), baseline_rows
         )
@@ -137,6 +184,11 @@ def plan_batch(filenames: list[str], baseline_rows: list[dict]) -> list[BatchIte
 
 def estimated_cost(items: list[BatchItem]) -> float:
     return len(items) * ESTIMATED_COST_PER_DOCUMENT
+
+
+def worth_extracting(items: list[BatchItem]) -> list[BatchItem]:
+    """Everything except the documents that look purely administrative."""
+    return [i for i in items if i.kind != "administrative"]
 
 
 def extract_one(item: BatchItem, pdf_bytes: bytes, baseline_rows: list[dict],
