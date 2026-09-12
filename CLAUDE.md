@@ -878,3 +878,56 @@ return near-zero completeness and trip `SPARSE_THRESHOLD`. A `BaselinePolicy` sc
 cash return, occupancy floor, LVR ceiling, ICR floor, NTA floor, hedging minimum, fee
 entitlements, distribution-suspension triggers — is a small, well-shaped job. SIPOs are
 short and highly consistent in structure, so extraction should be cheap and accurate.
+
+## BaselinePolicy: the SIPO schema ✅ built
+
+`modules/policy.py` extracts a SIPO into the IM baseline. Separate from `SyndicateReport`
+on purpose — a SIPO run through the report schema returns near-zero completeness and trips
+`SPARSE_THRESHOLD`, because they answer different questions. Same discipline: grouped,
+every field required and nullable, page and verbatim quote on every value.
+
+`to_baseline_row()` maps onto `Syndicate_Baseline` columns and **only writes what the SIPO
+states**, so a silent document never blanks a value entered by hand.
+
+All 12 SIPOs extracted in 95s (~$4). Written to the baseline.
+
+| Syndicate | Return | Occupancy | LVR | ICR | NTA | Hedging |
+|---|---|---|---|---|---|---|
+| `CENT-WILLIAMSSTRE` | **10%** | >90% | <40% | 2.0x | 90% | ≥50% |
+| `CENT-AIRPARKBENDO` | 9% | >80% | <60% | 2.0x | 90% | ≥50% |
+| `CENT-CARTERSBIRCH` | 8% | >90% | <45% | 2.0x | 90% | ≥50% |
+| `SGB` / `CENT-AIRWAYSSOE` | 7% | >90% | <55% | 2.0x | 85–90% | ≥50% |
+| `CENT-BROADWAY33` | 7% | >75% | <55% | 2.0x | 85% | — |
+| `CENT-BUILDINGA` / `B` | 7% | >80% | <50% | 2.0x | 90% | — |
+| `OYST-PASTORALHOUS` | 6% | — | <55% | — | — | — |
+| `PMG-OFFICE` | — | >80% | <50% | — | — | — |
+
+**Oyster and PMG commit to far less than Centuria.** Centuria's SIPOs state a return, an
+occupancy floor, an LVR ceiling, an ICR floor and an NTA floor. Oyster states a return and
+an LVR ceiling; PMG states no return at all. Less promised is less to be held to.
+
+### Promise versus FY2026 practice
+
+| Syndicate | Promised | Actual | Gap |
+|---|---|---|---|
+| `CENT-AIRPARKBENDO` | 9% | 20% | **+11.00** |
+| `CENT-WILLIAMSSTRE` | 10% | 12% | +2.00 |
+| `SGB` | 7% | 6.75% | −0.25 |
+| `OYST-PASTORALHOUS` | 6% | 2.64% | **−3.36** |
+| `CENT-BUILDINGA` | 7% | 3.12% | **−3.88** |
+| `CENT-BUILDINGB` | 7% | 2.00% | **−5.00** |
+
+Every syndicate is inside its LVR ceiling. **Both Graham Street buildings pay less than
+half what their SIPOs promise**, on payout ratios of 39% — the earnings exist and are being
+retained.
+
+**Four SIPOs commit to hedging a minimum 50% of debt, and all four have their earliest swap
+already expired**: Williams Street 2025-04-05, Airpark 2026-04-07, SGB 2026-06-05. That is
+a written policy against a disclosed fact, per syndicate, by name.
+
+### Watch the expiry on a promise
+
+SGB's SIPO qualifies its 7% as applying "until 31 March 2020". A regex over the text missed
+that; the schema caught it in `cash_return_basis`. **Check the basis before treating any
+gap as a shortfall** — several of these promises are dated, and the SIPOs themselves are
+from 2019–2025.
