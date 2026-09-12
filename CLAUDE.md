@@ -572,3 +572,51 @@ wound up or restructured. Worth checking whether that holding is stale in `Syndi
 
 **Centuria's own website needs a login.** Credentials are not entered on the user's behalf,
 so those reports have to be downloaded by hand or shared into Drive.
+
+### All 30 looked up on the Disclose Register
+
+`Syndicate_Baseline` gained `scheme_number`, `register_name` and `register_status`.
+**12 of 30 are Registered, 1 is Cancelled, 17 are not on the register at all.**
+
+| syndicate_id | Scheme | Status |
+|---|---|---|
+| `SGB` | SCH12448 AUGUSTA ST GEORGES BAY ROAD PROPERTY TRUST | Registered |
+| `CENT-BROADWAY33` | SCH11912 33 BROADWAY TRUST | Registered |
+| `CENT-AIRPARKBENDO` | SCH11740 AIRPARK NOMINEES JOINT VENTURE | Registered |
+| `CENT-CARTERSBIRCH` | SCH11560 BIRCH NOMINEES JOINT VENTURE | Registered |
+| `CENT-BUILDINGA` | SCH10571 BUILDING A GRAHAM STREET LP | Registered |
+| `CENT-BUILDINGB` | SCH10922 BUILDING B GRAHAM STREET LP | Registered |
+| `CENT-DIVERSIFIED` | SCH12900 CENTURIA NZ DIVERSIFIED PROPERTY FUND | Registered |
+| `CENT-AIRWAYSSOE` | SCH12323 SIR WILLIAM PICKERING DRIVE LP | Registered |
+| `CENT-WILLIAMSSTRE` | SCH11570 WILLIAMS STREET NOMINEES JV | Registered |
+| `OYST-VIP100` | SCH11688 100 HARRIS PROPORTIONATE OWNERSHIP SCHEME | Registered |
+| `OYST-PASTORALHOUS` | SCH12806 PASTORAL HOUSE PROPORTIONATE OWNERSHIP SCHEME | Registered |
+| `PMG-OFFICE` | SCH10921 PMG DIRECT OFFICE FUND | Registered |
+| `PMG-GENERATION` | SCH12827 PMG GENERATION FUND | **Cancelled** |
+
+The register also confirms `WESTPOINT PROPERTY SCHEME` (SCH11602) is **Cancelled**,
+independently corroborating that it was sold.
+
+**Two register lookups corrected our names.** `Centuria Airpark Nominees (Bendon)` is
+officially `AIRPARK NOMINEES JOINT VENTURE`, and `Carters Birch Nominees Joint Venture` is
+officially `BIRCH NOMINEES JOINT VENTURE` — both recorded under a tenant or a variant.
+`CENTURIA NZ DIVERSIFIED PROPERTY FUND` has also been renamed twice (`AUGUSTA PROPERTY
+FUND` → `CENTURIA NZ PROPERTY FUND` → current), which is exactly the kind of drift the
+alias list exists to absorb.
+
+**The 17 absences are explainable, not search failures**, and they fall into four groups:
+
+- **Australian assets**, outside the NZ regime entirely: `Centuria Industrial Fund` (an
+  ASX-listed REIT), `Centuria Grenfell St` (Adelaide), `Jasper Warrawong Plaza` (NSW).
+- **Not a scheme**: `Centuria Penrose Ltd` is a limited company, so it belongs on the
+  Companies Register, not Disclose.
+- **Managers with no registered schemes at all**: Erskine & Owen, Jasper, MacKersey, Merx
+  (private debt), My Farm, Silver Fern. Likely wholesale or private offers outside the
+  retail disclosure regime.
+- **Unresolved**: Centuria NZ Agricultural, Centuria Govt Income 1 and 2, Vicky Street
+  Nominees, PMG Preston Road. Worth a manual check — they may sit under a different legal
+  name.
+
+**What this means for document coverage.** The register supplies annual reports for the 12
+Registered schemes, which together with Drive gets most of the way. The remaining ~17 have
+to come from the manager directly — Centuria's login, or email.

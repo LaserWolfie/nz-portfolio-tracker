@@ -55,6 +55,12 @@ BASELINE_COLUMNS = [
     "syndicate_id",
     "canonical_name",
     "aliases",
+    # Official identity on the NZ Disclose Register. A stable external key that
+    # sidesteps name matching entirely, and a status worth watching: a scheme
+    # that goes Cancelled has been wound up or restructured.
+    "scheme_number",
+    "register_name",
+    "register_status",
     "owner_entity",
     "manager_name",
     "sector",
