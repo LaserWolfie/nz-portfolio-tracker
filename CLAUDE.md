@@ -528,3 +528,47 @@ and one to confirm by hand:
 Note the `Merx/` folder already contains a hand-built review structure (`holdings/`,
 `governing/`, `questions/`, `memos/`, `extracted/`, `statements/`, `REVIEW-METHOD.md`) —
 prior art for this pipeline, worth reading before building the benchmarking module.
+
+### The Disclose Register solves the coverage problem
+
+<https://disclose-register.companiesoffice.govt.nz> — the statutory register for NZ managed
+investment schemes. **Public, no login.** Search by scheme name, scheme number, manager
+name or NZBN at `app.mbieregisters.govt.nz/disclose/ui/start/searchSchemes`.
+
+For `AUGUSTA ST GEORGES BAY ROAD PROPERTY TRUST (SCH12448)` the Documents tab holds:
+
+| Section | Document |
+|---|---|
+| Financial Statements | `SGBR_-_FY26_Annual_Report.pdf` (2.3MB, uploaded 29 Jun 2026) |
+| Other Documents → Annual report | the same file |
+| Governing | `TrustDeed-AugustaStGeorgesBayRoadPropertyTrust.pdf` (2.5MB) |
+| SIPO | `SIPOSTGEORGESBAYROADPROPERTYTRUST.pdf` |
+| Manager and Supervisor | consent and certificate |
+
+That FY26 annual report is the **same document** already extracted from Downloads. So the
+register supplies, for free and without a login, the one report a year that matters — for
+every registered scheme, including the 23 with nothing in Drive.
+
+The **Trust Deed and SIPO** matter just as much: they are the source for the
+`Syndicate_Baseline` covenant and trust-deed columns, which are still empty.
+
+Three things to know:
+
+- **Annual only.** `Interim scheme financial statement(s)` is "Not specified" for Augusta,
+  so the half-yearly reports are not on the register. One period a year from this source;
+  the biannuals still have to come from the manager or Drive.
+- **Scheme numbers are a better key than names.** `SCH12448` is official, stable and
+  external. Worth a `scheme_number` column on `Syndicate_Baseline` — it sidesteps name
+  matching entirely, and the register's own scheme name is the best `canonical_name`.
+  Already identified: `33 BROADWAY TRUST` SCH11912, `AUGUSTA ST GEORGES BAY ROAD PROPERTY
+  TRUST` SCH12448, `AIRPARK NOMINEES JOINT VENTURE` SCH11740 (our "Centuria Airpark
+  (Bendon)"), `BIRCH NOMINEES JOINT VENTURE` SCH11560, `PMG DIRECT OFFICE FUND` SCH10921.
+- **Document links are JavaScript, not plain URLs.** Bulk collection means driving the
+  browser per scheme rather than fetching a list of hrefs.
+
+**`PMG GENERATION FUND` (SCH12827) shows as `Cancelled` on the register**, while
+`PMG DIRECT OFFICE FUND` (SCH10921) is `Registered`. A cancelled registration usually means
+wound up or restructured. Worth checking whether that holding is stale in `Syndicate_Data`.
+
+**Centuria's own website needs a login.** Credentials are not entered on the user's behalf,
+so those reports have to be downloaded by hand or shared into Drive.
