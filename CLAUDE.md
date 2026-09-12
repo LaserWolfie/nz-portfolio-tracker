@@ -488,3 +488,43 @@ and Westpoint is sold.
 Drive is organised as one folder per company, each holding one folder per syndicate. Note
 `St Georges Bay Road` and `Augusta St Georges Bay Road` are separate folders for the same
 syndicate — both resolve to `SGB`.
+
+### Drive coverage — the real constraint
+
+Swept the whole Drive tree. The structure is:
+
+```
+Property/
+├── Proportional Property/
+│   └── Gold Recovery/              <- the ONLY company folder
+│       ├── Sir William Pickering Drive/   33 Broadway Trust/
+│       ├── Augusta St Georges Bay Road/   St Georges Bay Road/
+│       ├── Centuria Penrose Ltd/          Birch Nominees/
+│       ├── Merx/                          Westpoint/ (sold)
+│       └── Tax Statements/  2024 Reports/  Sales/  Purchases/ ...
+└── MP Innovation Carpark/
+```
+
+**Only 7 of 30 syndicates have documents in Drive**, all under Gold Recovery. The other 23
+— every holding of Cambridge, Group Reality and Roy Wilson — have no folder at all:
+
+- *Cambridge*: Building A Graham Street, Centuria Airpark (Bendon), Centuria Industrial
+  Fund, Surplus Brokers, VIP Pacific
+- *Group Reality*: Centuria NZ Agricultural, Centuria NZ Diversified, Jasper Industrial,
+  PMG Direct Office, PMG Generation, Vicky Street Nominees, Building B Graham Street,
+  Williams Street Nominees
+- *Roy Wilson*: Centuria Govt Income 1 and 2, Centuria Grenfell St, E+O Heathcare, E+O NZ
+  Daycare, IDEAL Electrical, Ohanga, Pastoral House, Preston Road, Warrawong Plaza
+
+Matching itself is no longer the constraint: **34 of 37 real filenames resolve**. The
+misses are `Product_Disclosure_Statement.pdf` and `Governing_Document.pdf` (no syndicate
+name in the filename at all — the document's own entity name resolves them at extraction),
+and one to confirm by hand:
+
+- `240729-MP-Medical-Inv-LP-Capital-Raise-Update-v2.pdf` sits in the **MP Innovation
+  Carpark** folder but names "MP Medical Inv LP". Probably the same investment as
+  `MACK-MPINNOVATION`; not aliased on a guess.
+
+Note the `Merx/` folder already contains a hand-built review structure (`holdings/`,
+`governing/`, `questions/`, `memos/`, `extracted/`, `statements/`, `REVIEW-METHOD.md`) —
+prior art for this pipeline, worth reading before building the benchmarking module.
