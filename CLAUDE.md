@@ -776,3 +776,51 @@ again.
 `SyndicateReport` to disk as soon as it is returned, and load from that cache on re-run.
 `scratchpad/retry_failed.py` shows the pattern, together with exponential backoff on the
 Sheets 429. Worth folding into `modules/batch.py` before the next quarter.
+
+## Benchmarking ✅ built
+
+`modules/benchmarks.py`, **plain Python, no LLM** — same rule as `deltas`: every number
+must be reproducible from stored rows. `tests/test_benchmarks.py` covers it.
+
+`build_cohort()` takes the latest stored period per syndicate and drops what cannot be
+compared: **non-property holdings** (Merx is a debt/equity fund with no cap rate) and
+anything the baseline marks **sold** (Preston Road). `rank_metric()` ranks best-first per
+`METRICS`, which records for each measure whether higher or lower is better.
+
+Three deliberate properties:
+
+- **Undisclosed is omitted, never ranked last.** Not reporting a figure is a separate
+  finding that `deltas` already raises; scoring it as "worst" would double-count it and
+  distort everyone else's rank. Every `Rank` carries its own `n`, which is the count of
+  *disclosers*, not of the cohort.
+- **Dollars are normalised against valuation** before ranking. $16,735 of capex means one
+  thing on a $2m shed and another on a $115m tower.
+- **Sample size travels with the answer.** With ten syndicates a bottom quartile is two or
+  three of them. `sector_ranks()` refuses to rank within a sector of fewer than three.
+
+`manager_scorecards()` is the sharpest tool here: where a manager runs several funds, their
+medians say more than any one fund, and **disclosure rate is a property of the manager**,
+not of the building.
+
+### First run, FY2026, 10 syndicates
+
+| Manager | Funds | LVR | WALE | Payout | Fees | Cap rate | Disclosure |
+|---|---|---|---|---|---|---|---|
+| Centuria | 8 | 42.6% | 5.2y | 86% | 0.93% | 6.25% | 71% |
+| Oyster | 2 | 40.5% | 10.0y | **106%** | **2.10%** | 6.12% | 75% |
+
+**Oyster charges 2.3x Centuria's fee load and pays out above earnings.** VIP Pacific alone
+is at 3.40% of scheme property.
+
+Trailing on the most metrics: **Augusta St Georges Bay Road** (3 of 10 — capex 0.01% of
+valuation, rent reversion +28.4%, WALE 3.35y), **Centuria Penrose** (3 of 7 — highest LVR
+48.7%, lowest cap rate 5.50% so the most generous valuation), and **Pastoral House**
+(3 of 9 — payout 138%).
+
+**Disclosure gaps across the portfolio** — occupancy missing from 7 of 10, interest cover
+from 6, lease incentives from 6, vacancy from 5. These are not oversights in single
+reports; they are what the industry has settled on not telling investors, and they are the
+strongest collective question to put to managers.
+
+Sources 2–4 (listed NZ vehicles, valuer sector data, IM promises) are still to come and
+belong in one `Industry_Benchmarks` tab keyed by (metric, sector, period, source).
