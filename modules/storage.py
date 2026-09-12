@@ -237,22 +237,37 @@ def resolve_syndicate_id(entity_name: str, baseline_rows: list[dict]) -> str | N
     if not target:
         return None
 
-    for row in baseline_rows:
-        candidates = [row.get("canonical_name", "")]
-        aliases = str(row.get("aliases", "") or "")
-        candidates.extend(aliases.split(ALIAS_SEPARATOR))
-        for candidate in candidates:
-            if candidate and _normalise(candidate) == target:
-                return str(row.get("syndicate_id")) or None
+    def names_of(row):
+        """Every name a syndicate answers to: canonical plus aliases."""
+        names = [row.get("canonical_name", "")]
+        names.extend(str(row.get("aliases", "") or "").split(ALIAS_SEPARATOR))
+        return [_normalise(n) for n in names if str(n).strip()]
 
-    # Fall back to containment, which catches "Augusta St Georges Bay Road
-    # Property Trust" against a baseline holding "St Georges Bay Road".
-    matches = set()
-    for row in baseline_rows:
-        canonical = _normalise(row.get("canonical_name", ""))
-        if canonical and (canonical in target or target in canonical):
-            matches.add(str(row.get("syndicate_id")))
-    return matches.pop() if len(matches) == 1 else None
+    def sole(matches):
+        """One syndicate or nothing. Never a guess between two."""
+        return matches.pop() if len(matches) == 1 else None
+
+    # Exact match first. Collected rather than returned on the first hit: two
+    # rows can carry the same alias by mistake, and picking whichever appeared
+    # first would file a report against an arbitrary one of them.
+    exact = {
+        str(row.get("syndicate_id"))
+        for row in baseline_rows
+        if target in names_of(row)
+    }
+    if exact:
+        return sole(exact)
+
+    # Then containment, which catches "Augusta St Georges Bay Road Property
+    # Trust" against a baseline holding "St Georges Bay Road". Aliases are
+    # searched too: a holding recorded under its tenant keeps that name as an
+    # alias, so "Cedenco Update 2026" must still reach Williams Street.
+    partial = {
+        str(row.get("syndicate_id"))
+        for row in baseline_rows
+        if any(name in target or target in name for name in names_of(row))
+    }
+    return sole(partial)
 
 
 # --------------------------------------------------------------------------

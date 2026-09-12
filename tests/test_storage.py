@@ -145,6 +145,24 @@ class TestSyndicateMatching:
     def test_legal_suffix_and_case_are_ignored(self):
         assert resolve_syndicate_id("33 BROADWAY TRUST, LIMITED", self.BASELINE) == "BWY"
 
+    def test_partial_match_against_an_alias(self):
+        """A holding recorded under its tenant keeps that name as an alias, so a
+        document naming only part of it must still resolve."""
+        baseline = [{
+            "syndicate_id": "CENT-AIRWAYSSOE",
+            "canonical_name": "Sir William Pickering Drive Limited Partnership",
+            "aliases": "AIRWAYS soe|Sir William Pickering Drive",
+        }]
+        assert resolve_syndicate_id("Airways", baseline) == "CENT-AIRWAYSSOE"
+
+    def test_ambiguous_partial_match_still_returns_none(self):
+        """Two syndicates could be meant, so guessing is worse than asking."""
+        baseline = [
+            {"syndicate_id": "A", "canonical_name": "Graham Street A", "aliases": "Graham"},
+            {"syndicate_id": "B", "canonical_name": "Graham Street B", "aliases": "Graham"},
+        ]
+        assert resolve_syndicate_id("Graham", baseline) is None
+
     def test_unknown_name_returns_none(self):
         """Better to ask than to file a report against the wrong syndicate."""
         assert resolve_syndicate_id("Some Other Property Fund", self.BASELINE) is None

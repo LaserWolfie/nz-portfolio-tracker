@@ -365,10 +365,31 @@ subtlety for benchmarking — a `distribution_rate` quoted on *subscription pric
 syndicate fact and is comparable across syndicates, but the family's own yield depends on
 what each entity actually paid, so the two must never be mixed.
 
-**Two syndicates have documents but no holding row**: "Sir William Pickering Drive
-Limited Partnership" and "Westpoint Property Scheme" appear in Drive and Downloads but not
-in `Syndicate_Data`, so they resolve to no match. Either add them or confirm they are
-sold.
+### Names: fix them in the baseline, never in `Syndicate_Data`
+
+Your sheet and the manager's reports rarely agree on a name. `AIRWAYS soe` was recorded
+under its **tenant**; every report calls the property `Sir William Pickering Drive Limited
+Partnership`. The same will happen again.
+
+**Do not rename rows in `Syndicate_Data`.** It is the system of record for holdings and
+feeds the existing dashboards. `Syndicate_Baseline` exists to absorb naming variance:
+
+```bash
+python scripts/manage_aliases.py --list
+python scripts/manage_aliases.py --rename CENT-AIRWAYSSOE "Sir William Pickering Drive Limited Partnership"
+python scripts/manage_aliases.py --add CENT-PENROSE "Centuria Penrose LP"
+```
+
+`--rename` promotes the report's name to `canonical_name` and keeps your shorthand as an
+alias, so both resolve. Nothing is written without `--write`.
+
+**`syndicate_id` never changes.** It is an opaque key and `Syndicate_Periods` rows are
+filed against it; changing it would orphan them. `CENT-AIRWAYSSOE` still reads as the
+Airways holding even though its canonical name is now the Pickering Drive partnership —
+that is fine, and better than breaking the link.
+
+**Westpoint Property Scheme was sold.** It has no baseline row, so a Westpoint document in
+a batch resolves to no match and is held back. That is the correct outcome, not a bug.
 
 Typos in `Syndicate_Data` are preserved as canonical ("Wholeale", "Heathcare", "Eskine &
 Owen" for Erskine & Owen) — it is the system of record, so aliases absorb the variance
