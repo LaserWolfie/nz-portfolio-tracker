@@ -325,18 +325,45 @@ lessons are baked into `make_id()` and guarded by tests:
   value depends on row order, and so was not stable.
 
 The script **never merges two names on a guess**; look-alikes are reported for a human to
-confirm. Outstanding pairs to resolve by hand:
+confirm. All four flagged pairs were confirmed and merged by
+`scripts/merge_baseline.py` (dry-run by default, `--write` to apply), taking the baseline
+from 34 rows to 30:
 
-- `Building B Graham Street Limited Partnership` vs `Graham St "B"` — probably the same
-  syndicate held by two entities (Cambridge, Group Reality).
-- `William St Nominees (Cedenco)` vs `Williams Street Nominees Joint Venture` — probably
-  the same.
-- `E+O Heathcare Fund` / `E+O N.Z. Daycare Fund` / `NZ Daycare Properties Fund LP` — check
-  whether the last two are one fund.
-- `SGB` (Augusta St Georges Bay Road) vs `CENT-STGEORGE` (St George Group) — related
-  names, possibly unrelated syndicates.
+| Survives | Absorbed | Why |
+|---|---|---|
+| `CENT-BUILDINGB` | `CENT-GRAHAMB` | `Graham St "B"` is Building B, held by Group Reality |
+| `CENT-WILLIAMSSTRE` | `CENT-WILLIAMST` | Cedenco is the Williams Street property |
+| `ESKI-DAYCARE` | `ESKI-DAYCARE2` | One childcare fund, two holdings |
+| `SGB` | `CENT-STGEORGE` | "St George Group" is Augusta St Georges Bay Road |
 
-To merge, delete the surplus row and add its name to the survivor's `aliases`.
+`SGB` survives rather than `CENT-STGEORGE` because the extracted period row was already
+filed against it. **`Building A` and `Building B` Graham Street remain separate** — they
+are genuinely different buildings.
+
+### The same property can wear several names
+
+A property appears more than once because it is **held by different family companies**, or
+because a parcel was **bought later on the secondary market at a different cost basis**.
+Neither makes it a different property.
+
+This is why the earlier metric comparison was misleading. Where two rows for the same
+property disagreed on LVR, WALE or ICR, that was **stale data on one row**, not two
+buildings. The tell for a true duplicate is byte-identical property metrics — `33 Broadway
+Trust`, `St George Group` and `Merx Wholeale` each show exactly that across their two
+owner rows.
+
+The consequence for anything that compares syndicates:
+
+- **Property facts** — valuation, LVR, WALE, cap rate, occupancy, ICR, facility expiry —
+  belong to the syndicate, and live in `Syndicate_Baseline` / `Syndicate_Periods`, once.
+- **Holding facts** — `Original_Value` (a cost basis), `Current_Value`, the family's yield
+  on cost — belong to the holding, and stay in `Syndicate_Data`, once per owner.
+
+`Original_Value` is therefore **not** comparable across holdings as if it were a property
+metric: two entries for one property can differ wildly and both be right. Note the related
+subtlety for benchmarking — a `distribution_rate` quoted on *subscription price* is a
+syndicate fact and is comparable across syndicates, but the family's own yield depends on
+what each entity actually paid, so the two must never be mixed.
 
 **Two syndicates have documents but no holding row**: "Sir William Pickering Drive
 Limited Partnership" and "Westpoint Property Scheme" appear in Drive and Downloads but not
