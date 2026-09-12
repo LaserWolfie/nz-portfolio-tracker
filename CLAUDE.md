@@ -743,3 +743,36 @@ investor, a registered scheme and public audited accounts are the statutory norm
 that is absent, the offer was almost certainly made under the wholesale exclusion — which
 is legitimate, but means you get only what the manager chooses to send, and there is no
 public audited record to check it against. That is itself a governance finding.
+
+### First real cohort: 10 syndicates extracted
+
+11 documents, 153s, ~$10.40 all in. `Syndicate_Periods` holds **10 rows at 2026-03-31**.
+9 extracted cleanly (20–28 of 32 figures each); the two PMG files came back at 14/32 and
+were correctly held back as `SPARSE`.
+
+**Two portfolio-wide patterns, visible only because everything is in one structure:**
+
+- **Interest rate hedging has rolled off almost everywhere.** 8 of 10 syndicates have
+  their earliest swap already expired or expiring within three months. That is not an
+  individual syndicate problem, it is a portfolio-wide exposure to floating rates and one
+  question to put to Centuria across every fund at once.
+- **The ICR covenant is disclosed but the achieved ratio is not, in 7 of 10.** Covenant
+  thresholds range 1.50x–2.00x. Compliance cannot be verified from any of these reports.
+  Systematic, not accidental.
+
+**Worst single syndicate: Pastoral House (Oyster)** — facility expires in 2 months
+(31 Oct 2026), earliest swap expires the same month, and a **payout ratio of 138%**, so
+distributions exceeded earnings. Centuria NZ Agricultural is also paying out above
+earnings at 105%.
+
+#### Cache extractions before saving
+
+The first run saved 7 of 9 and then hit `429 Quota exceeded ... Read requests per minute`
+from the Sheets API. Error isolation held — the two failures were recorded, not thrown —
+but the extracted reports lived only in memory, so recovering meant paying to extract them
+again.
+
+**Extraction costs money; saving does not.** Any batch script must write each
+`SyndicateReport` to disk as soon as it is returned, and load from that cache on re-run.
+`scratchpad/retry_failed.py` shows the pattern, together with exponential backoff on the
+Sheets 429. Worth folding into `modules/batch.py` before the next quarter.
