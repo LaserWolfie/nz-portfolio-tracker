@@ -682,3 +682,64 @@ come from the manager — Centuria's login, or email:
 
 That is the ceiling for free document collection. Benchmarking across the full 30 is not
 achievable from public sources alone; benchmarking across the ~14 is.
+
+### FY2026 reports pulled from the registers
+
+11 files, 27.5 MB, in `C:\Users\Reforged\Downloads\register_reports\` — covering **10
+syndicates not already in Drive**. Together with the 4 already there (Augusta SGB, 33
+Broadway, Birch Nominees, Sir William Pickering) that is the full 14.
+
+| File | Syndicate | Pages |
+|---|---|---|
+| `Airpark_-_FY26_Annual_Report.pdf` | `CENT-AIRPARKBENDO` | 40 |
+| `Building_A_-_FY26_Annual_Report.pdf` | `CENT-BUILDINGA` | 40 |
+| `Building_B_-_FY26_Annual_Report.pdf` | `CENT-BUILDINGB` | 40 |
+| `CNZDPF_-_FY26_Annual_Report.pdf` | `CENT-DIVERSIFIED` | 35 |
+| `Williams_St_-_FY26_Annual_Report.pdf` | `CENT-WILLIAMSSTRE` | 40 |
+| `100_Harris_POS_-_FY26_Annual_Report.pdf` | `OYST-VIP100` | 36 |
+| `Pastoral_House_POS_-_FY26_Annual_Report.pdf` | `OYST-PASTORALHOUS` | 36 |
+| `PMG_Direct_Office_Fund_-_FY26_Financial_Statements.pdf` | `PMG-OFFICE` | 36 |
+| `PMG_Direct_Office_Fund_-_FY26_Annual_Report_Reg62.pdf` | `PMG-OFFICE` | 6 |
+| `Centuria_NZ_Agricultural_Property_Fund_-_FY26_Financial_Statements.pdf` | `CENT-AGRICULTURAL` | 36 |
+| `Centuria_Penrose_-_FY26_Financial_Statements.pdf` | `CENT-PENROSE` | 36 |
+
+Two things learned while collecting:
+
+- **The Companies Register serves direct, stable PDF URLs** —
+  `/companies/app/service/services/documents/<HASH>` — fetchable with `requests`, no
+  session. **Disclose does not**: its links are session-scoped
+  (`/disclose/document/<session-token>?nodeId=…`), so those must be clicked in a browser.
+- **Centuria files its full annual report as the company's financial statements.** The
+  Penrose and Agricultural PDFs open "ANNUAL REPORT", not bare statutory accounts, so the
+  earlier worry that company filings would be too thin to extract does not apply to them.
+- PMG splits its filing in two: 36pp financial statements plus a 6pp Reg 62 annual report.
+  Both are kept; the Reg 62 summary may carry the headline metrics the statements bury.
+
+### Reports NOT publicly available, and whether they should be
+
+16 of 30. The legal test: under the FMC Act 2013 a scheme offered to **retail** investors
+must be registered on Disclose and file audited financial statements publicly. Offers made
+only to **wholesale/eligible investors** (Schedule 1) are exempt, and overseas entities are
+outside the regime entirely.
+
+| Holding | Why not public | Should it be? |
+|---|---|---|
+| Centuria Industrial Fund | ASX-listed Australian REIT | **Yes — via ASX/Centuria AU.** Freely available, wrong jurisdiction |
+| Centuria Grenfell St | Adelaide asset | Probably Australian unlisted — investor portal |
+| Jasper Warrawong Plaza | NSW asset | Australian; check Jasper's portal |
+| Centuria Govt Income 1, 2 | Absent under Centuria and "Government" | Likely Australian; confirm with Centuria |
+| E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical | Erskine & Owen has no registered schemes | **Only if offered to retail.** If you invested as retail, ask why unregistered |
+| Jasper Industrial Income Plus Fund | No Jasper schemes registered | As above |
+| MP Innovation Carpark | No MacKersey schemes registered | As above |
+| Ohanga | No My Farm schemes registered | As above |
+| Surplus Brokers | No Silver Fern schemes registered | As above |
+| Merx Wholeale PIE Trust 1 | Wholesale debt fund | **No** — debt/equity fund, wholesale, and excluded from property benchmarking anyway |
+| PMG Preston Road | Not among PMG's 5 schemes | **No separate report likely** — a property inside a fund |
+| Vicky Street Nominees | Not on Disclose | **No separate report likely**, or it is `VICKERS ROAD PROPERTY SCHEME` SCH11556 — confirm |
+| PMG Generation Fund | Scheme **Cancelled** (SCH12827) | Historic filings may remain under SCH12827 — worth checking |
+
+**The question worth putting to managers**: for any of these you hold as a *retail*
+investor, a registered scheme and public audited accounts are the statutory norm. Where
+that is absent, the offer was almost certainly made under the wholesale exclusion — which
+is legitimate, but means you get only what the manager chooses to send, and there is no
+public audited record to check it against. That is itself a governance finding.
