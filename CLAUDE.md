@@ -985,3 +985,51 @@ publish semi-annually, and **all file on the NZX** rather than the Disclose Regi
 
 Note `icr_actual` is measurable for only 4 of 10 and `occupancy_percent` for 3. Benchmarks
 cannot fix a disclosure gap — those stay questions for the managers.
+
+### Listed vehicles collected: Argosy and PFI
+
+11 benchmark rows, from the two vehicles whose results are most directly comparable.
+Presentations are in `Downloads\listed_vehicles\`; both were fetched by direct URL and read
+locally with `pypdf`, so collecting these cost nothing.
+
+| Source | Balance date | Sector | Metrics |
+|---|---|---|---|
+| **Argosy Property** FY26 | **31 Mar 2026** — same as the syndicates | Diversified (55% ind / 35% off / 10% LFR) | occupancy 94.6%, WALT 5.0y, cap rate 6.26%, payout 97%, gearing 37.2%, under-rented 9.3% |
+| **Property for Industry** FY26 | 30 Jun 2026 — *three months later* | Pure Industrial | occupancy 98.7%, WALT 5.04y, LVR 34.2%, payout 87%, under-rented 7.1% |
+
+**Three basis differences are recorded on the rows and must not be forgotten:**
+
+- **Argosy's 37.2% is debt to TOTAL ASSETS, not LVR on property value.** A syndicate's LVR
+  is debt over the valuation, so the listed figure understates the comparable number. The
+  LVR gaps below are indicative, not exact.
+- **Payout is to AFFO** for both listed vehicles; syndicates report distributions to
+  distributable profit. Related, different denominator.
+- **PFI's balance date is 30 June**, a quarter after the syndicates'.
+
+### What the comparison says
+
+**Rent reversion is the standout, and it is not close.** Both listed vehicles are
+*under*-rented — Argosy by 9.3%, PFI by 7.1% — meaning their rents rise as leases roll.
+**Four of six syndicates are over-rented**: Augusta +28.4%, Building B +23.5%, Williams
+Street +18.2%, Building A +12.1%. On the same measure the gap to Argosy is 21 to 38 points.
+Only Penrose and Airpark sit on the right side of market.
+
+**Gearing runs higher across the portfolio.** Seven of ten syndicates are above Argosy's
+37.2%, led by Penrose at 48.7%. Allowing for the total-assets basis, the real gap is wider
+still.
+
+**WALE splits the portfolio in two.** Five syndicates beat the 5.0-year benchmark
+comfortably — Agricultural 15.5y, Penrose 14.9y, VIP Pacific 11.5y — while four trail it,
+Williams Street worst at 1.42 years against 5.0.
+
+**Cap rates cluster tighter than the benchmark.** Airpark and Penrose at 5.50% against
+Argosy's 6.26% means a more generous valuation on those two.
+
+**Payout looks good until you read the basis.** Eight of ten sit below Argosy's 97%, but
+Argosy's is to AFFO. Pastoral House at 138% and Agricultural at 105% are above it on any
+reading.
+
+Coverage is now 10/10 for LVR, payout and WALE, 9/9 for cap rate, 6/6 for rent reversion
+and 3/3 for occupancy. Still nothing for fees, capex, cash, vacancy or interest cover —
+Precinct, Goodman and Kiwi Property would add the office and retail comparators, and a
+valuer series would add sector cap rates and vacancy.
