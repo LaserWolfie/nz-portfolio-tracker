@@ -1033,3 +1033,40 @@ Coverage is now 10/10 for LVR, payout and WALE, 9/9 for cap rate, 6/6 for rent r
 and 3/3 for occupancy. Still nothing for fees, capex, cash, vacancy or interest cover —
 Precinct, Goodman and Kiwi Property would add the office and retail comparators, and a
 valuer series would add sector cap rates and vacancy.
+
+## Cross-checking extractions with a second model
+
+`scripts/crosscheck_fable.py` re-extracts the stored PDFs with a different model and diffs
+against `raw_json` in `Syndicate_Periods`. **It never overwrites stored data** — it reports,
+you decide.
+
+```bash
+python scripts/crosscheck_fable.py                    # preview and cost estimate
+python scripts/crosscheck_fable.py --run              # run the whole set
+python scripts/crosscheck_fable.py --run --only SGB   # one syndicate
+```
+
+Where two models independently agree on a figure, it can be put to a manager with
+confidence. Where they disagree, that figure needs a human eye before it becomes evidence.
+
+Two habits are built in. Each extraction is **written to disk before comparing**, so a
+crash never forces a paid re-run — this matters more on a second-model pass funded by
+finite credits. And figures are compared with a 1% tolerance, because 46.52 and 46.5 are
+the same number at different precision and flagging that would bury the real disagreements.
+
+### Pointing extraction at a different model
+
+`DEFAULT_MODEL` in `modules/extraction.py` stays `claude-opus-5`. **Pass the model
+explicitly rather than changing the default** — Fable is $10/$50 per MTok against Opus's
+$5/$25, so a default switch silently doubles the cost of every future quarter once the
+credits are gone.
+
+```python
+extract_report(pdf_bytes=..., api_key=key, model="claude-fable-5")
+batch.run_batch(documents, baseline, api_key=key, model="claude-fable-5")
+```
+
+Fable specifics that differ from Opus: thinking is always on, so `{"type": "disabled"}`
+returns a 400 (the code passes `adaptive`, which is fine); `temperature` and `top_p` are
+rejected (not used); and it needs **30-day data retention**, which this account has —
+confirmed by a live call returning `claude-fable-5` cleanly.
