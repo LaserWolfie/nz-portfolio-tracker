@@ -824,3 +824,57 @@ strongest collective question to put to managers.
 
 Sources 2–4 (listed NZ vehicles, valuer sector data, IM promises) are still to come and
 belong in one `Industry_Benchmarks` tab keyed by (metric, sector, period, source).
+
+## The SIPO is the IM baseline
+
+**The 5-page SIPO contains everything `Syndicate_Baseline` needs. The trust deeds do not
+need to be pulled for these fields.** SIPOs run 97–320 KB against trust deeds of 2.5–10 MB
+of legal drafting, and they state the scheme's own promises in plain numbered clauses:
+
+> • Provide investors a **minimum cash return of 7% per annum** before tax on original equity
+> • Property **occupancy greater than 90%**
+> • Maintain the **loan to value ratio below 55%**
+> • Maintain the **interest cost cover ratio not less than 2 times**
+> • **NTA not less than 85%** of NTA at acquisition
+> • Hedging: a **minimum 50%** of debt hedged
+
+Thresholds differ per syndicate, so these are real per-scheme promises rather than
+boilerplate:
+
+| Syndicate | Cash return | Occupancy | LVR limit | ICR | NTA floor | Hedging |
+|---|---|---|---|---|---|---|
+| `SGB` | 7% | >90% | <55% | ≥2.0x | ≥85% | ≥50% |
+| `CENT-AIRPARKBENDO` | 9% | >80% | <60% | ≥2.0x | ≥90% | ≥50% |
+| `CENT-BUILDINGA` | 7% | >80% | <50% | — | ≥90% | — |
+
+Collected into `Downloads\register_baseline\`. 3 of 12 so far.
+
+### Promise versus practice, FY2026
+
+| Syndicate | Promised | Actual | Gap |
+|---|---|---|---|
+| `SGB` | 7.00% | 6.75% | short 0.25 pts |
+| `CENT-AIRPARKBENDO` | 9.00% | 20.00% | ahead 11 pts |
+| `CENT-BUILDINGA` | 7.00% | **3.12%** | **short 3.88 pts** |
+
+All three sit within their LVR limits, with 7.6–42.9 points of headroom.
+
+**Check the units before believing any of these.** The 20% and 3.12% both looked wrong at
+first glance. `extraction_notes` verified both: Airpark pays "18.00% to 31 July 2025, then
+21.00%" on an original investment of $25,000 per unit against a 17% LVR — a long-held,
+de-geared asset genuinely ahead of its promise. Building A's rate "changed during the year
+from 4.25%" and its payout ratio is 39%, so the earnings exist and are being retained. The
+question for Building A is why, when the SIPO promises 7%.
+
+**The hedging clause is the sharpest finding available.** SIPOs commit to a minimum 50% of
+debt hedged, and the FY2026 cohort shows 8 of 10 syndicates with their earliest swap
+already expired or expiring within three months. That is a stated policy testable directly
+against disclosed fact, per syndicate, by name.
+
+### Baseline extraction needs its own schema
+
+`SyndicateReport` is built for periodic reports; a SIPO or trust deed run through it would
+return near-zero completeness and trip `SPARSE_THRESHOLD`. A `BaselinePolicy` schema —
+cash return, occupancy floor, LVR ceiling, ICR floor, NTA floor, hedging minimum, fee
+entitlements, distribution-suspension triggers — is a small, well-shaped job. SIPOs are
+short and highly consistent in structure, so extraction should be cheap and accurate.
