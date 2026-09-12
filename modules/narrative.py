@@ -15,6 +15,7 @@ door.
 """
 
 import json
+import re
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -226,6 +227,17 @@ def write_narrative(row: dict, flags: list[Flag] | None = None,
     return narrative
 
 
+def number_tokens(text: str) -> list[str]:
+    """Every number in `text`, as written.
+
+    Thousands separators are stripped FIRST. Splitting "$115,000,000" on commas
+    yields "115", "000", "000", none of which match a stored 115000000, so every
+    large figure would look invented. Shared with the cross-check script so that
+    lesson lives in one place.
+    """
+    return re.findall(r"\d+(?:\.\d+)?", re.sub(r"(?<=\d),(?=\d{3})", "", text))
+
+
 def unsupported_numbers(narrative: SyndicateNarrative, facts: dict) -> list[str]:
     """Numbers in the narrative that do not appear in the facts it was given.
 
@@ -233,14 +245,6 @@ def unsupported_numbers(narrative: SyndicateNarrative, facts: dict) -> list[str]
     accurately but applied wrongly -- but it catches invention, which is the
     failure that would quietly destroy trust in the whole review.
     """
-    import re
-
-    def tokens(text: str) -> list[str]:
-        # Strip thousands separators FIRST. Splitting "$115,000,000" on commas
-        # yields "115", "000", "000", none of which match the stored
-        # 115000000, so every large figure would look invented.
-        return re.findall(r"\d+(?:\.\d+)?", re.sub(r"(?<=\d),(?=\d{3})", "", text))
-
     def variants(token: str) -> set[str]:
         out = {token}
         if "." in token:
@@ -248,7 +252,7 @@ def unsupported_numbers(narrative: SyndicateNarrative, facts: dict) -> list[str]
         return out
 
     allowed = set()
-    for token in tokens(json.dumps(facts, default=str)):
+    for token in number_tokens(json.dumps(facts, default=str)):
         allowed |= variants(token)
 
     written = " ".join(
@@ -259,7 +263,7 @@ def unsupported_numbers(narrative: SyndicateNarrative, facts: dict) -> list[str]
     )
 
     unsupported = []
-    for token in tokens(written):
+    for token in number_tokens(written):
         if not variants(token) & allowed:
             unsupported.append(token)
     return unsupported

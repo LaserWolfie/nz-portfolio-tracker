@@ -34,6 +34,7 @@ import toml  # noqa: E402
 
 from modules import sheets, storage  # noqa: E402
 from modules.extraction import extract_report  # noqa: E402
+from modules.narrative import number_tokens  # noqa: E402
 from modules.schema import SyndicateReport, iter_figures  # noqa: E402
 
 CROSSCHECK_MODEL = "claude-fable-5"
@@ -48,6 +49,16 @@ CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "crossche
 #: Two figures this far apart in relative terms are the same number reported to
 #: different precision, not a disagreement.
 TOLERANCE = 0.01
+
+#: Narrative fields, where the substance is the numbers and the sentence around
+#: them is the model's own words. Two models phrase these differently every time,
+#: so comparing them as strings flags them on every run for every syndicate and
+#: buries the real disagreements -- the same noise TOLERANCE exists to prevent.
+#:
+#: `entity_name`, `manager_name` and `report_type` are text too and are
+#: deliberately NOT here: they identify the document. A mismatch there means the
+#: wrong report or the wrong syndicate, which must stay loud.
+PROSE_FIGURES = {"management_fee_escalation_basis", "related_party_transactions"}
 
 
 def find_pdf(filename: str) -> str | None:
@@ -76,6 +87,37 @@ def agrees(a, b) -> bool:
     return str(a).strip().lower() == str(b).strip().lower()
 
 
+def compare_prose(a, b) -> str:
+    """Compare two narrative statements.
+
+    Returns "agree", "wording" (same numbers, different sentence),
+    "second_omits" / "stored_omits" (one recorded fewer figures than the
+    other) or "differ" (they genuinely conflict).
+
+    The numbers carry the meaning -- the fee escalator, the related-party
+    totals -- so those are compared exactly. Differing prose around identical
+    numbers is two models writing one fact two ways: reported, but not a
+    disagreement. One model stating something the other left null IS one, and
+    is the case worth catching: a disclosure that one model found and the
+    other missed.
+    """
+    if a is None and b is None:
+        return "agree"
+    if a is None or b is None:
+        return "differ"
+    x, y = set(number_tokens(str(a))), set(number_tokens(str(b)))
+    if x != y:
+        # A subset is one model recording less of a long note, not the two
+        # contradicting each other. Kept separate because a contradiction needs
+        # checking today and a missing prior-year comparative does not.
+        if y < x:
+            return "second_omits"
+        if x < y:
+            return "stored_omits"
+        return "differ"
+    return "agree" if str(a).strip() == str(b).strip() else "wording"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", action="store_true", help="actually call the API")
@@ -83,6 +125,7 @@ def main():
     parser.add_argument("--model", default=CROSSCHECK_MODEL)
     args = parser.parse_args()
 
+    label = args.model.split("-")[1]
     os.makedirs(CACHE, exist_ok=True)
     key = toml.load(".streamlit/secrets.toml")["ANTHROPIC_API_KEY"]
     spreadsheet = sheets.get_client().open_by_key(sheets.PROPERTY_SHEET_ID)
@@ -130,17 +173,35 @@ def main():
         second = dict(iter_figures(other))
 
         diffs = []
+        wording = []
         for name in first:
             a, b = first[name].value, second[name].value
-            if not agrees(a, b):
+            if name in PROSE_FIGURES:
+                verdict = compare_prose(a, b)
+                if verdict == "differ":
+                    diffs.append((name, a, b, first[name].page, second[name].page))
+                elif verdict != "agree":
+                    missing = {
+                        "wording": "same numbers, different wording",
+                        "second_omits": f"{label} omits "
+                                        f"{len(set(number_tokens(str(a))) - set(number_tokens(str(b))))}"
+                                        " figure(s) the stored value carries",
+                        "stored_omits": f"{label} carries "
+                                        f"{len(set(number_tokens(str(b))) - set(number_tokens(str(a))))}"
+                                        " figure(s) the stored value omits",
+                    }[verdict]
+                    wording.append((name, missing, first[name].page, second[name].page))
+            elif not agrees(a, b):
                 diffs.append((name, a, b, first[name].page, second[name].page))
 
         checked = len(first)
         print(f"\n=== {sid} {note}  {checked - len(diffs)}/{checked} agree")
         for name, a, b, pa, pb in diffs:
             disagreements += 1
-            print(f"    {name:<34} stored {str(a):<16}(p{pa})   {args.model.split('-')[1]} "
-                  f"{str(b):<16}(p{pb})")
+            print(f"    {name:<34} stored {str(a)[:60]:<62}(p{pa})")
+            print(f"    {'':<34} {label:<6} {str(b)[:60]:<62}(p{pb})")
+        for name, detail, pa, pb in wording:
+            print(f"    {name:<34} {detail} (p{pa}/p{pb})")
 
     print(f"\n{disagreements} figure(s) disagree across the set - check those by hand.")
     print(f"Second-model output cached in {os.path.relpath(CACHE)}; nothing was overwritten.")
