@@ -69,7 +69,7 @@ column letter or position in code — the letters below changed four times on 20
 | J | `Currency` | `AUD` or `NZD`. |
 | K | `FX_To_NZD` | Fixed **1.09** for AUD (user-set), 1.00 for NZD. |
 | L | `Annual_Distribution` | **Current run rate in NZ$**; the dashboards sum it. Formula `=D*E*I*K` where all four inputs are known, typed otherwise. |
-| M–O | `LVR_Percent`, `WALT_Years`, `Vacancy_Percent` | Mostly fractions (0.44 = 44%) but **not consistently** — Gold Recovery's Williams Street LVR reads `30.69`. WALT is years. |
+| M–O | `LVR_Percent`, `WALT_Years`, `Vacancy_Percent` | Fractions (0.44 = 44%); WALT is years. A whole-number percentage renders as ×100 on Property Forensics — Gold Recovery's Williams Street was entered as `30.69` and showed **3069% LVR** until corrected on 2026-09-14. LVR is a property fact, so every holding of one syndicate carries the same value. |
 | P–R | `Tax_Type`, `Status`, `Review_Pending` | `Tax_Type` is `PIE` on the two Merx rows only; the other two are empty. |
 | S–AB | `Distribution_At_Risk` … `Payout_Ratio` | Sparsely filled. |
 
