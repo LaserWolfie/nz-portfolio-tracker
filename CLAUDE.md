@@ -77,7 +77,9 @@ Rules for maintaining it (confirmed with the user, 2026-09-14):
 
 - **`Annual_Distribution` is the current rate, not last year's average.** Check the
   report's subsequent-events note: Penrose paid 5.00 cps in FY26 but 4.25 cps from April
-  2026, and the sheet showed the old figure for months.
+  2026, and the sheet showed the old figure for months. Not every change is in a report:
+  St Georges Bay Road paid 6.75% through FY26 and **3.5%** now (September 2026), a cut known
+  only from the user. Confirm current rates with the user, not only the latest annual report.
 - **Only put the formula on a row whose units, basis, rate and FX are all filled.** A
   formula over a blank input evaluates to $0, and the holding silently drops out of income.
   To complete a row, fill the inputs and copy an existing formula down.
@@ -611,7 +613,9 @@ Three things to know:
 
 **`PMG GENERATION FUND` (SCH12827) shows as `Cancelled` on the register**, while
 `PMG DIRECT OFFICE FUND` (SCH10921) is `Registered`. A cancelled registration usually means
-wound up or restructured. Worth checking whether that holding is stale in `Syndicate_Data`.
+wound up or restructured. **Resolved 2026-09-14:** PMG Generation merged into **Pacific Property Fund
+Limited** on 31 July 2026, and Group Realty's 50,000 units became 41,098 PPF shares. The baseline keeps
+`syndicate_id` `PMG-GENERATION` with the new canonical name and the old one as an alias.
 
 **Centuria's own website needs a login.** Credentials are not entered on the user's behalf,
 so those reports have to be downloaded by hand or shared into Drive.
@@ -635,7 +639,7 @@ so those reports have to be downloaded by hand or shared into Drive.
 | `OYST-VIP100` | SCH11688 100 HARRIS PROPORTIONATE OWNERSHIP SCHEME | Registered |
 | `OYST-PASTORALHOUS` | SCH12806 PASTORAL HOUSE PROPORTIONATE OWNERSHIP SCHEME | Registered |
 | `PMG-OFFICE` | SCH10921 PMG DIRECT OFFICE FUND | Registered |
-| `PMG-GENERATION` | SCH12827 PMG GENERATION FUND | **Cancelled** |
+| `PMG-GENERATION` | SCH12827 PMG GENERATION FUND | **Cancelled** — merged into Pacific Property Fund Limited, 31 Jul 2026 |
 
 The register also confirms `WESTPOINT PROPERTY SCHEME` (SCH11602) is **Cancelled**,
 independently corroborating that it was sold.
@@ -724,8 +728,8 @@ come from the manager — Centuria's login, or email:
   was listed here in error — it is the NZ fund, so its reports may be public after all.
 - *NZ but privately reported*: E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical, Jasper
   Industrial, MP Innovation, Merx, Ohanga, Surplus Brokers, PMG Preston Road.
-- *Cancelled*: PMG Generation Fund — historic filings may still sit on Disclose under
-  SCH12827.
+- *Cancelled*: PMG Generation Fund — merged into Pacific Property Fund Limited on 31 July 2026.
+  Historic filings may still sit on Disclose under SCH12827; PPF itself has not been looked up.
 
 That is the ceiling for free document collection. Benchmarking across the full 30 is not
 achievable from public sources alone; benchmarking across the ~14 is.
@@ -783,7 +787,7 @@ outside the regime entirely.
 | Merx Wholeale PIE Trust 1 | Wholesale debt fund | **No** — debt/equity fund, wholesale, and excluded from property benchmarking anyway |
 | PMG Preston Road | Not among PMG's 5 schemes | **No separate report likely** — a property inside a fund |
 | Vicky Street Nominees | Not on Disclose | **No separate report likely**, or it is `VICKERS ROAD PROPERTY SCHEME` SCH11556 — confirm |
-| PMG Generation Fund | Scheme **Cancelled** (SCH12827) | Historic filings may remain under SCH12827 — worth checking |
+| PMG Generation Fund | Scheme **Cancelled** (SCH12827); merged into Pacific Property Fund Limited 31 Jul 2026 | PPF's own reports are the source now — look it up on Disclose |
 
 **The question worth putting to managers**: for any of these you hold as a *retail*
 investor, a registered scheme and public audited accounts are the statutory norm. Where
