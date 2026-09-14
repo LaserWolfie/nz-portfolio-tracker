@@ -48,10 +48,50 @@ name** — a renamed or duplicated file in Drive must not be able to redirect a 
 - Stocks: `STOCKS_SHEET_ID`, tab `Clean_Stocks`.
 - Property: `PROPERTY_SHEET_ID`, tab `Syndicate_Data`.
 
-`Syndicate_Data` is flat: **one row per syndicate**, 22 columns A–V, no period/date
-column. Columns K, L, M are unused placeholders. Syndicates are identified only by the
-free-text `Entity_Name` in column A. `Owner_Entity == 'Gold Recovery Ltd'` separates
-Bryn's holdings from the parents'.
+`Syndicate_Data` is flat: **one row per holding** (owner × syndicate; a later parcel bought
+at a different cost gets its own row), 28 columns A–AB, no period/date column. Syndicates
+are identified only by the free-text `Entity_Name` in column A. `Owner_Entity == 'Gold
+Recovery Ltd'` separates Bryn's holdings from the parents'. **All money is NZ dollars.**
+
+Every reader (`Home.py`, `scripts/scaffold_baseline.py`) looks columns up **by header
+name**, which is why columns could be inserted and moved safely. Never address this tab by
+column letter or position in code — the letters below changed four times on 2026-09-14.
+
+| Col | Header | Meaning |
+|---|---|---|
+| A–C | `Entity_Name`, `Owner_Entity`, `Manager` | Identity. Typos preserved; see *Names* below. |
+| D | `Units_Held` | Units, shares or interests, in the manager's own terms. **Blank = unknown, never 0.** |
+| E | `Unit_Basis` | Dollars per unit the manager's rate is paid on, in the holding's own currency: $50,000 for a syndicate unit, $25,000 for Airpark (remaining equity after its 2021 capital return), **$1 for anything quoting cents per unit/share**. Not the price paid. |
+| F | `Original_Value` | NZ$ actually paid — a holding fact, differs between parcels. AUD holdings converted at purchase. |
+| G | `Current_Value` | NZ$. |
+| H | `Original_Annual_Distribution` | The **IM/PDS forecast** rate on the unit, not a yield on cost — SGB is 7% × $50,000 = $3,500/unit even for units bought at $35,000. |
+| I | `Current_Rate` | Latest declared rate as a fraction formatted `%`. Cents-per-unit rates are the same number as a % of $1 (4.25 cps = 4.25%). |
+| J | `Currency` | `AUD` or `NZD`. |
+| K | `FX_To_NZD` | Fixed **1.09** for AUD (user-set), 1.00 for NZD. |
+| L | `Annual_Distribution` | **Current run rate in NZ$**; the dashboards sum it. Formula `=D*E*I*K` where all four inputs are known, typed otherwise. |
+| M–O | `LVR_Percent`, `WALT_Years`, `Vacancy_Percent` | Mostly fractions (0.44 = 44%) but **not consistently** — Gold Recovery's Williams Street LVR reads `30.69`. WALT is years. |
+| P–R | `Tax_Type`, `Status`, `Review_Pending` | `Tax_Type` is `PIE` on the two Merx rows only; the other two are empty. |
+| S–AB | `Distribution_At_Risk` … `Payout_Ratio` | Sparsely filled. |
+
+Rules for maintaining it (confirmed with the user, 2026-09-14):
+
+- **`Annual_Distribution` is the current rate, not last year's average.** Check the
+  report's subsequent-events note: Penrose paid 5.00 cps in FY26 but 4.25 cps from April
+  2026, and the sheet showed the old figure for months.
+- **Only put the formula on a row whose units, basis, rate and FX are all filled.** A
+  formula over a blank input evaluates to $0, and the holding silently drops out of income.
+  To complete a row, fill the inputs and copy an existing formula down.
+- **AUD holdings** are Centuria Govt Income 1 and 2, Centuria Grenfell St and Warrawong
+  Plaza — the Location column on the quarterly tab says which. The rate is fixed rather than
+  a live `GOOGLEFINANCE` lookup, which can briefly error and read as $0; change `FX_To_NZD`
+  on those four rows when it is reviewed. `Centuria Industrial Fund` is the **NZ** fund
+  (bank description `CENTURIA NZ INDUSTRI`), in NZD.
+- **Merx pays a variable distribution** (the deed sets it at whatever holds NAV at $1), so
+  its `Annual_Distribution` stays typed.
+- **Sold holdings are removed from this tab and recorded on the `Sales` tab.** The dashboards
+  do not read `Status`, so a sold row left in place still counts toward income and net worth.
+- **The hand-maintained quarterly tabs are often more current than this one**, and the two
+  can disagree. Check both before trusting either.
 
 ## Gotchas
 
@@ -189,8 +229,9 @@ different shape: Tenant, Location, Manager, Owner, Original/Current Value, Annua
 Annual Return. These are holding snapshots, not covenant forensics — no LVR, ICR, WALE or
 facility expiry. They are **not** read or written by the pipeline. They are a candidate
 backfill source for valuation and distribution history, but matching entities across 15
-tabs is its own project. `Syndicate_Data` likewise stays untouched so existing dashboards
-keep working.
+tabs is its own project. `Syndicate_Data` is likewise **never written by the pipeline**; it
+is maintained by hand and feeds the existing dashboards (its column layout and upkeep rules
+are under *Google Sheets* above).
 
 ### Phase 3 — Delta engine ✅ done
 `modules/deltas.py`, **plain Python, no LLM** — every flag must be reproducible and
@@ -606,8 +647,10 @@ alias list exists to absorb.
 
 **The 17 absences are explainable, not search failures**, and they fall into four groups:
 
-- **Australian assets**, outside the NZ regime entirely: `Centuria Industrial Fund` (an
-  ASX-listed REIT), `Centuria Grenfell St` (Adelaide), `Jasper Warrawong Plaza` (NSW).
+- **Australian assets**, outside the NZ regime entirely: `Centuria Grenfell St` (Adelaide),
+  `Jasper Warrawong Plaza` (NSW). *`Centuria Industrial Fund` was originally listed here as an
+  ASX-listed REIT. That was wrong: bank records (`CENTURIA NZ INDUSTRI`) show it is the NZ
+  fund, so it should be searched on Disclose under its NZ name — not yet done.*
 - **Not a scheme**: `Centuria Penrose Ltd` is a limited company, so it belongs on the
   Companies Register, not Disclose.
 - **Managers with no registered schemes at all**: Erskine & Owen, Jasper, MacKersey, Merx
@@ -652,8 +695,9 @@ check working, not failing.
 - `CENT-VICKYSTREET` — not on Disclose. `VICKERS ROAD PROPERTY SCHEME` (SCH11556, Centuria,
   Registered) is a **possible** match but the names genuinely differ (Vickers Road vs Vicky
   Street, Property Scheme vs Nominees JV). **Confirm before linking.**
-- `CENT-GOVT1`, `CENT-GOVT2` — nothing on Disclose under Centuria or "Government". Most
-  likely Australian Centuria funds, consistent with Grenfell St and Centuria Industrial Fund.
+- `CENT-GOVT1`, `CENT-GOVT2` — nothing on Disclose under Centuria or "Government".
+  **Confirmed Australian (AUD)** by the user on 2026-09-14, alongside Grenfell St and
+  Warrawong Plaza.
 - `PMG-PRESTONROAD` — PMG has only five schemes on Disclose and Preston Road is not among
   them. Likely a property held *inside* a PMG fund rather than a scheme in its own right.
 
@@ -673,8 +717,9 @@ time there.
 **14 of 30 syndicates have documents obtainable from public sources.** The remaining 16 must
 come from the manager — Centuria's login, or email:
 
-- *Australian, outside the NZ regime*: Centuria Industrial Fund (ASX), Centuria Grenfell St
-  (Adelaide), Jasper Warrawong Plaza (NSW), and probably Centuria Govt Income 1 and 2.
+- *Australian, outside the NZ regime*: Centuria Grenfell St (Adelaide), Jasper Warrawong Plaza
+  (NSW), and Centuria Govt Income 1 and 2 (all four confirmed AUD). Centuria Industrial Fund
+  was listed here in error — it is the NZ fund, so its reports may be public after all.
 - *NZ but privately reported*: E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical, Jasper
   Industrial, MP Innovation, Merx, Ohanga, Surplus Brokers, PMG Preston Road.
 - *Cancelled*: PMG Generation Fund — historic filings may still sit on Disclose under
@@ -724,7 +769,7 @@ outside the regime entirely.
 
 | Holding | Why not public | Should it be? |
 |---|---|---|
-| Centuria Industrial Fund | ASX-listed Australian REIT | **Yes — via ASX/Centuria AU.** Freely available, wrong jurisdiction |
+| Centuria Industrial Fund | Originally assumed to be the ASX-listed REIT; bank records show it is the **NZ** fund | **Probably yes** — an NZ fund may be on Disclose. Not yet searched under its NZ name |
 | Centuria Grenfell St | Adelaide asset | Probably Australian unlisted — investor portal |
 | Jasper Warrawong Plaza | NSW asset | Australian; check Jasper's portal |
 | Centuria Govt Income 1, 2 | Absent under Centuria and "Government" | Likely Australian; confirm with Centuria |
