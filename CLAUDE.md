@@ -698,21 +698,26 @@ check working, not failing.
 
 ### The remaining four
 
-- `CENT-VICKYSTREET` — not on Disclose. `VICKERS ROAD PROPERTY SCHEME` (SCH11556, Centuria,
-  Registered) is a **possible** match but the names genuinely differ (Vickers Road vs Vicky
-  Street, Property Scheme vs Nominees JV). **Confirm before linking.**
+- `CENT-VICKYSTREET` — **resolved 2026-09-14.** The manager's June 2026 financial statements are
+  titled `VICKERY STREET PROPERTY SCHEME`, so the holding is **Vickery Street Nominees Joint
+  Venture** — not Vickers Road (SCH11556). It is not on Disclose under "Vickery" either. The
+  baseline's canonical name is now the Vickery form, with the sheet's "Vicky Street" kept as an
+  alias.
 - `CENT-GOVT1`, `CENT-GOVT2` — nothing on Disclose under Centuria or "Government".
   **Confirmed Australian (AUD)** by the user on 2026-09-14, alongside Grenfell St and
-  Warrawong Plaza.
+  Warrawong Plaza. Govt Income 2 is **Centuria Government Income Property Fund No. 2**
+  (ARSN 653 978 753, 25 Nile Street, Port Adelaide; units A$1.00, PDS forecast 5.25% FY22).
+  Govt Income 1 is not yet identified.
 - `PMG-PRESTONROAD` — PMG has only five schemes on Disclose and Preston Road is not among
   them. Likely a property held *inside* a PMG fund rather than a scheme in its own right.
+  **Sold** — removed from `Syndicate_Data` and recorded on the `Sales` tab (2026-09-14).
 
 ### Final coverage: three registers swept
 
 | Register | Holds | Use |
 |---|---|---|
 | **Disclose** `disclose-register.companiesoffice.govt.nz` | Annual financial statements, trust deed, SIPO | **12 syndicates** |
-| **Companies** `app.companiesoffice.govt.nz` | Annual financial statements, for companies required to file | **2 syndicates** (Penrose FY22–26, Agricultural FY24–26) |
+| **Companies** `app.companiesoffice.govt.nz` | Annual financial statements, for companies required to file | **3 syndicates** (Penrose FY22–26, Agricultural FY24–26, Centuria NZ Industrial Fund FY19–26, company 6806353) |
 | **Limited Partnerships** `lp-register.companiesoffice.govt.nz` | **Annual returns only — no financial statements** | Identity and status only |
 
 The LP register was checked directly: `NZ DAYCARE PROPERTIES FUND LP` (50065049) lists five
@@ -720,12 +725,15 @@ annual returns and its registration, and nothing else. **LPs and trusts are a de
 documents** — they confirm an entity exists but file no accounts publicly. Do not spend more
 time there.
 
-**14 of 30 syndicates have documents obtainable from public sources.** The remaining 16 must
-come from the manager — Centuria's login, or email:
+**15 of 30 syndicates have documents obtainable from public sources** — Centuria NZ Industrial
+Fund was added on 2026-09-14 via the Companies Register. The remaining 15 must come from the
+manager — Centuria's login, or email:
 
 - *Australian, outside the NZ regime*: Centuria Grenfell St (Adelaide), Jasper Warrawong Plaza
   (NSW), and Centuria Govt Income 1 and 2 (all four confirmed AUD). Centuria Industrial Fund
-  was listed here in error — it is the NZ fund, so its reports may be public after all.
+  was listed here in error — it is the NZ fund, and files its accounts on the Companies Register.
+  The Australian funds send investors PDSs and fund updates rather than filing publicly;
+  Grenfell's June 2026 update is the source for its FY27 rate.
 - *NZ but privately reported*: E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical, Jasper
   Industrial, MP Innovation, Merx, Ohanga, Surplus Brokers, PMG Preston Road.
 - *Cancelled*: PMG Generation Fund — merged into Pacific Property Fund Limited on 31 July 2026.
@@ -775,10 +783,10 @@ outside the regime entirely.
 
 | Holding | Why not public | Should it be? |
 |---|---|---|
-| Centuria Industrial Fund | Originally assumed to be the ASX-listed REIT; bank records show it is the **NZ** fund | **Probably yes** — an NZ fund may be on Disclose. Not yet searched under its NZ name |
-| Centuria Grenfell St | Adelaide asset | Probably Australian unlisted — investor portal |
+| Centuria Industrial Fund | Not on Disclose — an NZ **company** (6806353, formerly Augusta Industrial Fund Limited), not a registered scheme | **Public** — annual financial statements on the Companies Register, FY19–FY26. FY26 extracted into `Syndicate_Periods` |
+| Centuria Grenfell St | Australian unlisted: Centuria 25 Grenfell Street Fund (ARSN 656 250 154), Adelaide | Investor-only — PDS and fund updates from Centuria. FY27 forecast 2.00 cpu; fund term ends 1 Apr 2027 |
 | Jasper Warrawong Plaza | NSW asset | Australian; check Jasper's portal |
-| Centuria Govt Income 1, 2 | Absent under Centuria and "Government" | Likely Australian; confirm with Centuria |
+| Centuria Govt Income 1, 2 | Australian unlisted; No. 2 is Centuria Government Income Property Fund No. 2 (ARSN 653 978 753) | Investor-only via Centuria. No. 1 not yet identified |
 | E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical | Erskine & Owen has no registered schemes | **Only if offered to retail.** If you invested as retail, ask why unregistered |
 | Jasper Industrial Income Plus Fund | No Jasper schemes registered | As above |
 | MP Innovation Carpark | No MacKersey schemes registered | As above |
@@ -786,7 +794,7 @@ outside the regime entirely.
 | Surplus Brokers | No Silver Fern schemes registered | As above |
 | Merx Wholeale PIE Trust 1 | Wholesale debt fund | **No** — debt/equity fund, wholesale, and excluded from property benchmarking anyway |
 | PMG Preston Road | Not among PMG's 5 schemes | **No separate report likely** — a property inside a fund |
-| Vicky Street Nominees | Not on Disclose | **No separate report likely**, or it is `VICKERS ROAD PROPERTY SCHEME` SCH11556 — confirm |
+| Vickery Street Nominees (sheet: Vicky Street) | Not on Disclose under either name | From the manager — June 2026 financial statements received. **Not** Vickers Road SCH11556 |
 | PMG Generation Fund | Scheme **Cancelled** (SCH12827); merged into Pacific Property Fund Limited 31 Jul 2026 | PPF's own reports are the source now — look it up on Disclose |
 
 **The question worth putting to managers**: for any of these you hold as a *retail*
