@@ -768,6 +768,10 @@ Two things learned while collecting:
   `/companies/app/service/services/documents/<HASH>` — fetchable with `requests`, no
   session. **Disclose does not**: its links are session-scoped
   (`/disclose/document/<session-token>?nodeId=…`), so those must be clicked in a browser.
+  In the in-app browser a click saves straight to `Downloads` — first as a `<uuid>.tmp`,
+  renamed to the real filename a few seconds later — so wait for the named file, check it
+  starts `%PDF-`, then move it into `register_reports\`. On the search page Enter does not
+  submit; click the Search button.
 - **Centuria files its full annual report as the company's financial statements.** The
   Penrose and Agricultural PDFs open "ANNUAL REPORT", not bare statutory accounts, so the
   earlier worry that company filings would be too thin to extract does not apply to them.
@@ -785,10 +789,10 @@ outside the regime entirely.
 |---|---|---|
 | Centuria Industrial Fund | Not on Disclose — an NZ **company** (6806353, formerly Augusta Industrial Fund Limited), not a registered scheme | **Public** — annual financial statements on the Companies Register, FY19–FY26. FY26 extracted into `Syndicate_Periods` |
 | Centuria Grenfell St | Australian unlisted: Centuria 25 Grenfell Street Fund (ARSN 656 250 154), Adelaide | Investor-only — PDS and fund updates from Centuria. FY27 forecast 2.00 cpu; fund term ends 1 Apr 2027 |
-| Jasper Warrawong Plaza | NSW asset | Australian; check Jasper's portal |
+| Jasper Warrawong Plaza | NSW asset; Jasper Warrawong Plaza NZ LP invests in the Warrawong Plaza Fund, managed by **Elanor** | Investor-only — Elanor's quarterly report, forwarded via Jasper's portal. March 2026 saved to `Syndicate_Periods` |
 | Centuria Govt Income 1, 2 | Australian unlisted; No. 2 is Centuria Government Income Property Fund No. 2 (ARSN 653 978 753) | Investor-only via Centuria. No. 1 not yet identified |
 | E+O Heathcare, E+O/NZ Daycare, IDEAL Electrical | Erskine & Owen has no registered schemes | **Only if offered to retail.** If you invested as retail, ask why unregistered |
-| Jasper Industrial Income Plus Fund | No Jasper schemes registered | As above |
+| Jasper Industrial Income Plus Fund | No Jasper schemes registered; the report states it is for wholesale investors only | Wholesale, so no — quarterly reports via Jasper's portal. Q1 FY27 (30 Jun 2026) saved to `Syndicate_Periods` |
 | MP Innovation Carpark | No MacKersey schemes registered | As above |
 | Ohanga | No My Farm schemes registered | As above |
 | Surplus Brokers | No Silver Fern schemes registered | As above |
@@ -835,6 +839,48 @@ again.
 `SyndicateReport` to disk as soon as it is returned, and load from that cache on re-run.
 `scratchpad/retry_failed.py` shows the pattern, together with exponential backoff on the
 Sheets 429. Worth folding into `modules/batch.py` before the next quarter.
+
+### Second cohort and holding updates, 2026-09-14
+
+`Syndicate_Periods` gained 8 rows: the 33 Broadway and Sir William Pickering Drive FY26
+annual reports from Disclose (25/32 each), and six **sparse exceptions** — Montreal/IDEAL
+(13/32), MP Innovation (11), E+O Healthcare (11), NZ Daycare (10), Jasper Industrial Income
+Plus (14) and Warrawong Plaza (14). These managers publish only short quarterly updates, so a
+thin row is all that will ever exist and quarterly-to-quarterly comparison is like with like.
+Each carries `SAVED AS SPARSE EXCEPTION` at the head of `extraction_notes`. Aliases were added
+for `Erskine Owen Montreal Property Syndicate LP` and `E+O Healthcare Properties Fund LP`.
+
+Extraction traps found in these documents — check for them before saving a sparse row:
+
+- **The report can be wrong, not the extractor.** MP Innovation prints "WALT (years) 553
+  years 514 years". Saved blank with a note rather than guessed at 5.14.
+- **Amounts printed in millions come back in millions**, despite schema descriptions saying
+  dollars. Warrawong returned valuation `193.0`, debt `109.5`, earnings `0.51`. Any dollar
+  figure under 1,000 is a missed scale; converted ×1,000,000 before saving. Australian funds'
+  dollars are AUD.
+- **An average rate is not the current rate.** Sir William Pickering's stored 4.38% is the
+  FY26 average; the contract rate has been 5.00% since 1 July 2025. Warrawong's 0.62 cpu is
+  quarterly, not annual.
+
+Syndicate_Data / Q3 2026 updates, one holding at a time with the user's approval: Centuria
+Industrial, Surplus Brokers, PMG Direct Office, Pacific Property Fund, Vickery Street, Govt
+Income 1 and 2, Grenfell St, Ohanga. Conventions this settled:
+
+- **Current value = stated NAV/NTA per unit × units × FX.** Where no NAV per unit is stated,
+  use net assets ÷ units on issue (PMG Direct Office: $0.935) and say it was derived. For a
+  partnership, the partner's own capital account is the stated figure (Ohanga, $46,611).
+  A newer transaction price beats an older NAV (PPF stays at the $1.1899 merger price).
+- **Confirm the rate against what was actually paid.** Surplus Brokers showed 4.5% on the
+  sheet; the manager's 8% was confirmed by the user's $666.67 monthly deposit.
+- **Check the raw cell, not the displayed one.** `LVR_Percent` displays `0.47` while holding
+  `0.4729`, so an expected-value check on the display fails. Q3's Capital Gain, Change in
+  Annual $, Annual Return and Monthly Return are formulas — never write them.
+
+Dates to watch: Govt Income 1's loan expired and a term-extension vote was held on 11 Aug
+2026 (outcome unknown; its 4.5% rate awaits the July 2026 update); PPF has paid nothing since
+the merger (7% is the forecast); Govt Income 2's loan expires 1 Dec 2026 with a November
+vote; Grenfell St's hedge ends 15 Mar 2027, loan 31 Mar 2027 and term 1 Apr 2027 with no
+strategy announced; a PPF debt tranche matures 31 May 2027.
 
 ## Benchmarking ✅ built
 
