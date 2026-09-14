@@ -69,7 +69,7 @@ column letter or position in code — the letters below changed four times on 20
 | J | `Currency` | `AUD` or `NZD`. |
 | K | `FX_To_NZD` | Fixed **1.09** for AUD (user-set), 1.00 for NZD. |
 | L | `Annual_Distribution` | **Current run rate in NZ$**; the dashboards sum it. Formula `=D*E*I*K` where all four inputs are known, typed otherwise. |
-| M–O | `LVR_Percent`, `WALT_Years`, `Vacancy_Percent` | Fractions (0.44 = 44%); WALT is years. A whole-number percentage renders as ×100 on Property Forensics — Gold Recovery's Williams Street was entered as `30.69` and showed **3069% LVR** until corrected on 2026-09-14. LVR is a property fact, so every holding of one syndicate carries the same value. |
+| M–O | `LVR_Percent`, `WALT_Years`, `Vacancy_Percent` | Fractions (0.44 = 44%); WALT is years. A whole-number percentage renders as ×100 on Property Forensics — a stray Williams Street row filed under Gold Recovery (which never owned it; the holding is Group Realty's, and the row was removed on 2026-09-14) was entered as `30.69` and showed **3069% LVR**. LVR is a property fact, so every holding of one syndicate carries the same value. |
 | P–R | `Tax_Type`, `Status`, `Review_Pending` | `Tax_Type` is `PIE` on the two Merx rows only; the other two are empty. |
 | S–AB | `Distribution_At_Risk` … `Payout_Ratio` | Sparsely filled. |
 
@@ -86,8 +86,10 @@ Rules for maintaining it (confirmed with the user, 2026-09-14):
   a live `GOOGLEFINANCE` lookup, which can briefly error and read as $0; change `FX_To_NZD`
   on those four rows when it is reviewed. `Centuria Industrial Fund` is the **NZ** fund
   (bank description `CENTURIA NZ INDUSTRI`), in NZD.
-- **Merx pays a variable distribution** (the deed sets it at whatever holds NAV at $1), so
-  its `Annual_Distribution` stays typed.
+- **Merx pays a variable distribution** (the deed sets it at whatever holds NAV at $1).
+  `Current_Rate` holds the user's running estimate — 11% as at September 2026, in line with the
+  fund's trailing twelve months of monthly returns — so its formula works like any other row.
+  Revisit the estimate against the monthly performance table rather than trusting it indefinitely.
 - **Sold holdings are removed from this tab and recorded on the `Sales` tab.** The dashboards
   do not read `Status`, so a sold row left in place still counts toward income and net worth.
 - **The hand-maintained quarterly tabs are often more current than this one**, and the two
