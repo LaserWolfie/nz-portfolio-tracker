@@ -51,7 +51,10 @@ with tab_intake:
             batch_spreadsheet, batch_baseline = spreadsheet, baseline_rows
 
             # --- Plan: free, no API calls ---
-            plan = batch.plan_batch([f.name for f in uploads], batch_baseline)
+            # Read once: an UploadedFile is consumed by .read(), and the cost preview
+            # below needs the bytes to know what is already cached.
+            documents = {f.name: f.getvalue() for f in uploads}
+            plan = batch.plan_batch(list(documents), batch_baseline)
             unmatched = [i for i in plan if i.status == batch.Status.UNMATCHED]
 
             st.subheader("1. Match plan")
@@ -80,17 +83,24 @@ with tab_intake:
                     "be extracted — the entity name inside the document is authoritative "
                     "and usually resolves them."
                 )
+            cached = batch.already_cached(
+                {name: documents[name] for name in (i.filename for i in plan)},
+                model=extraction.DEFAULT_MODEL,
+            )
+            to_extract = [i for i in plan if i.filename not in cached]
             st.caption(
-                f"**{len(plan)} document(s) will be extracted.** Estimated cost "
-                f"**~${batch.estimated_cost(plan):.2f}** at {extraction.DEFAULT_MODEL} rates. "
-                "Matching above was free."
+                f"**{len(plan)} document(s) will be processed"
+                + (f", {len(cached)} of them already extracted and cached "
+                   "(free to re-run)" if cached else "")
+                + f".** Estimated cost **~${batch.estimated_cost(to_extract):.2f}** at "
+                f"{extraction.DEFAULT_MODEL} rates. Matching above was free."
             )
 
             st.subheader("2. Extract")
             wanted = {i.filename for i in plan}
             if plan and st.button(f"🚀 Extract {len(plan)} document(s)", type="primary"):
                 progress = st.progress(0.0, text="Starting…")
-                documents = {f.name: f.read() for f in uploads if f.name in wanted}
+                documents = {k: v for k, v in documents.items() if k in wanted}
 
                 def _tick(done, total, item):
                     progress.progress(done / total, text=f"{done}/{total} — {item.filename}")

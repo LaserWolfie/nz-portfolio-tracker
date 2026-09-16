@@ -835,10 +835,30 @@ from the Sheets API. Error isolation held — the two failures were recorded, no
 but the extracted reports lived only in memory, so recovering meant paying to extract them
 again.
 
-**Extraction costs money; saving does not.** Any batch script must write each
-`SyndicateReport` to disk as soon as it is returned, and load from that cache on re-run.
-`scratchpad/retry_failed.py` shows the pattern, together with exponential backoff on the
-Sheets 429. Worth folding into `modules/batch.py` before the next quarter.
+**Extraction costs money; saving does not.** ✅ **Folded into `modules/batch.py`**
+(2026-09-16), so this no longer depends on remembering it in a one-off script.
+
+- `extract_one()` writes every report to the cache the moment it returns, before anything
+  else touches it, and reads the cache before calling the API. `run_batch()` threads the
+  directory through; `BatchItem.from_cache` records which documents cost nothing.
+- **The key is the content hash plus the model** (`cache_key()`), not the filename, so a
+  renamed file still hits and two copies of one report are extracted once — and a
+  cross-check under `claude-fable-5` never reads Opus's answer.
+- `load_cached()` and `store_cached()` **never raise**: a corrupt file, a full disk or a
+  read-only directory is a miss, not a failed run. Writes go to a temp file and are moved
+  into place, so an interrupted write cannot leave a half-file that reads as a hit.
+- `save_batch()` retries a Sheets **429** with exponential backoff
+  (`SAVE_MAX_ATTEMPTS`, `SAVE_BACKOFF_SECONDS`) and retries *only* rate limiting —
+  a malformed row fails immediately rather than wasting a minute first. A save that
+  fails anyway says so, and says the extraction is cached.
+- The cache lives at `$NZWM_EXTRACT_CACHE` or a `nz_wealth_extract_cache` folder in the
+  system temp directory; `cache_dir=None` disables it. `DEFAULT_CACHE_DIR` is resolved at
+  call time through a sentinel, so tests (and any run that wants its own folder) redirect
+  it without every caller passing it through. An autouse fixture gives each test its own
+  directory — without it, one test's cached report silently satisfies the next test that
+  uses the same fake bytes.
+- The intake tab's cost preview subtracts what is already cached (`already_cached()`), so
+  a re-run after a failure shows what it will actually cost rather than the cold-run price.
 
 ### Second cohort and holding updates, 2026-09-14
 

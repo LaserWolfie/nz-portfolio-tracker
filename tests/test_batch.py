@@ -34,6 +34,16 @@ def augusta() -> SyndicateReport:
     return SyndicateReport.model_validate(json.loads(FIXTURE.read_text(encoding="utf-8")))
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path, monkeypatch):
+    """Never read or write the real extraction cache from a test.
+
+    Without this, one test's cached report satisfies the next test that happens to
+    use the same fake PDF bytes, and a deliberately failing extraction quietly passes.
+    """
+    monkeypatch.setattr(batch, "DEFAULT_CACHE_DIR", str(tmp_path / "cache"))
+
+
 class TestFilenameReading:
     def test_report_words_and_years_are_stripped(self):
         assert name_from_filename(
@@ -283,3 +293,180 @@ class TestSaving:
         batch.save_batch(items)
         assert items[0].status == Status.FAILED
         assert items[1].status == Status.SAVED
+
+
+class TestExtractionCache:
+    """Extraction costs money; saving does not. A re-run must never pay twice."""
+
+    def _counting_extractor(self, monkeypatch, report):
+        calls = []
+
+        def fake(**kwargs):
+            calls.append(kwargs)
+            return report
+
+        monkeypatch.setattr(batch, "extract_report", fake)
+        return calls
+
+    def test_second_run_reads_the_cache_instead_of_the_api(self, monkeypatch, augusta, tmp_path):
+        calls = self._counting_extractor(monkeypatch, augusta)
+        cache = str(tmp_path / "c")
+
+        first = batch.extract_one(BatchItem("augusta.pdf"), b"%PDF-bytes", BASELINE,
+                                  cache_dir=cache)
+        second = batch.extract_one(BatchItem("augusta.pdf"), b"%PDF-bytes", BASELINE,
+                                   cache_dir=cache)
+
+        assert len(calls) == 1, "the second run must not call the API"
+        assert first.from_cache is False and second.from_cache is True
+        assert second.period_end == first.period_end == "2026-03-31"
+        assert second.syndicate_id == "SGB"
+
+    def test_a_renamed_file_still_hits_the_cache(self, monkeypatch, augusta, tmp_path):
+        """The key is the bytes, so re-filing a document does not make it cost again."""
+        calls = self._counting_extractor(monkeypatch, augusta)
+        cache = str(tmp_path / "c")
+        batch.extract_one(BatchItem("SGBR_FY26.pdf"), b"%PDF-bytes", BASELINE, cache_dir=cache)
+        item = batch.extract_one(BatchItem("Augusta - Annual Report 2026.pdf"), b"%PDF-bytes",
+                                 BASELINE, cache_dir=cache)
+        assert len(calls) == 1
+        assert item.from_cache is True
+
+    def test_a_different_model_is_not_a_hit(self, monkeypatch, augusta, tmp_path):
+        """A cross-check run must never read the first model's answer."""
+        calls = self._counting_extractor(monkeypatch, augusta)
+        cache = str(tmp_path / "c")
+        batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE,
+                          model="claude-opus-5", cache_dir=cache)
+        item = batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE,
+                                 model="claude-fable-5", cache_dir=cache)
+        assert len(calls) == 2
+        assert item.from_cache is False
+
+    def test_different_documents_do_not_collide(self, monkeypatch, augusta, tmp_path):
+        calls = self._counting_extractor(monkeypatch, augusta)
+        cache = str(tmp_path / "c")
+        batch.extract_one(BatchItem("a.pdf"), b"%PDF-one", BASELINE, cache_dir=cache)
+        batch.extract_one(BatchItem("b.pdf"), b"%PDF-two", BASELINE, cache_dir=cache)
+        assert len(calls) == 2
+
+    def test_a_corrupt_cache_file_is_a_miss_not_a_crash(self, monkeypatch, augusta, tmp_path):
+        calls = self._counting_extractor(monkeypatch, augusta)
+        cache = tmp_path / "c"
+        cache.mkdir()
+        (cache / batch.cache_key(b"%PDF-bytes", batch.DEFAULT_MODEL)).write_text("{ not json")
+
+        item = batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE,
+                                 cache_dir=str(cache))
+        assert len(calls) == 1
+        assert item.status == Status.EXTRACTED
+
+    def test_caching_can_be_turned_off(self, monkeypatch, augusta, tmp_path):
+        calls = self._counting_extractor(monkeypatch, augusta)
+        batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE, cache_dir=None)
+        batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE, cache_dir=None)
+        assert len(calls) == 2
+
+    def test_an_unwritable_cache_does_not_sink_the_run(self, monkeypatch, augusta, tmp_path):
+        """A full or read-only disk must cost time, never the extraction itself."""
+        self._counting_extractor(monkeypatch, augusta)
+
+        def explode(*args, **kwargs):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(batch.os, "replace", explode)
+        item = batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE,
+                                 cache_dir=str(tmp_path / "c"))
+        assert item.status == Status.EXTRACTED
+        assert item.report is not None
+
+    def test_a_failed_save_leaves_the_report_cached(self, monkeypatch, augusta, tmp_path):
+        """The whole point: a Sheets failure must not force a paid re-extraction."""
+        self._counting_extractor(monkeypatch, augusta)
+        cache = str(tmp_path / "c")
+        item = batch.extract_one(BatchItem("a.pdf"), b"%PDF-bytes", BASELINE, cache_dir=cache)
+
+        monkeypatch.setattr(batch, "save_report",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("sheets down")))
+        batch.save_batch([item])
+
+        assert item.status == Status.FAILED
+        assert batch.load_cached(cache, b"%PDF-bytes", batch.DEFAULT_MODEL) is not None
+        assert "cached" in item.error
+
+
+class TestSaveRetry:
+    """The quota error that cost a paid re-extraction the first time."""
+
+    def _item(self, augusta):
+        return BatchItem("a.pdf", status=Status.EXTRACTED, syndicate_id="SGB",
+                         period_end="2026-03-31", report=augusta)
+
+    def test_a_quota_error_is_retried_and_succeeds(self, monkeypatch, augusta):
+        monkeypatch.setattr(batch.time, "sleep", lambda seconds: None)
+        attempts = []
+
+        def flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise RuntimeError("APIError: [429]: Quota exceeded for read requests per minute")
+            return "appended"
+
+        monkeypatch.setattr(batch, "save_report", flaky)
+        item = self._item(augusta)
+        batch.save_batch([item])
+
+        assert item.status == Status.SAVED
+        assert len(attempts) == 3
+        assert any("rate limit" in note for note in item.notes)
+
+    def test_a_real_error_is_not_retried(self, monkeypatch, augusta):
+        """Retrying a malformed row just wastes a minute before failing anyway."""
+        monkeypatch.setattr(batch.time, "sleep", lambda seconds: None)
+        attempts = []
+
+        def broken(*args, **kwargs):
+            attempts.append(1)
+            raise RuntimeError("row_from_dict: unknown key 'occupancy'")
+
+        monkeypatch.setattr(batch, "save_report", broken)
+        item = self._item(augusta)
+        batch.save_batch([item])
+
+        assert item.status == Status.FAILED
+        assert len(attempts) == 1
+
+    def test_it_gives_up_rather_than_retrying_forever(self, monkeypatch, augusta):
+        monkeypatch.setattr(batch.time, "sleep", lambda seconds: None)
+        attempts = []
+
+        def always_limited(*args, **kwargs):
+            attempts.append(1)
+            raise RuntimeError("429 quota exceeded")
+
+        monkeypatch.setattr(batch, "save_report", always_limited)
+        item = self._item(augusta)
+        batch.save_batch([item])
+
+        assert item.status == Status.FAILED
+        assert len(attempts) == batch.SAVE_MAX_ATTEMPTS
+
+
+class TestCostPreview:
+    def test_cached_documents_are_not_counted_as_cost(self, monkeypatch, augusta, tmp_path):
+        """A re-run after a failure should quote what it will really cost."""
+        cache = str(tmp_path / "c")
+        monkeypatch.setattr(batch, "extract_report", lambda **kw: augusta)
+        batch.extract_one(BatchItem("a.pdf"), b"%PDF-a", BASELINE, cache_dir=cache)
+
+        documents = {"a.pdf": b"%PDF-a", "b.pdf": b"%PDF-b"}
+        cached = batch.already_cached(documents, cache_dir=cache)
+
+        assert cached == {"a.pdf"}
+        plan = [BatchItem("a.pdf"), BatchItem("b.pdf")]
+        unpaid = [i for i in plan if i.filename not in cached]
+        assert batch.estimated_cost(unpaid) == pytest.approx(batch.ESTIMATED_COST_PER_DOCUMENT)
+
+    def test_no_cache_means_everything_costs(self, augusta):
+        documents = {"a.pdf": b"%PDF-a", "b.pdf": b"%PDF-b"}
+        assert batch.already_cached(documents, cache_dir=None) == set()

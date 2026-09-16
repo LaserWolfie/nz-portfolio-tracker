@@ -15,10 +15,20 @@ records its own outcome.
 name printed inside the report is evidence. Where the two disagree the extracted
 name wins and the conflict is surfaced, because a file named for last quarter's
 syndicate is a filing error waiting to corrupt two histories.
+
+**Extraction costs money; saving does not.** Every report is written to the cache
+the moment it returns, so a Sheets outage, a rate limit or a crash part-way through
+a thirty-document quarter never forces a paid re-extraction. A re-run reads the
+cache and calls nothing. This was learned the hard way: one run saved 7 of 9 rows,
+hit `429 Quota exceeded` from the Sheets API, and the reports already paid for
+existed only in memory.
 """
 
+import hashlib
 import os
 import re
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -34,6 +44,25 @@ MAX_CONCURRENT_DOCUMENTS = 3
 #: Rough cost of one document, both passes, on claude-opus-5. Used only to warn
 #: before a run; never for billing.
 ESTIMATED_COST_PER_DOCUMENT = 0.80
+
+#: Where extracted reports are cached. Override with the NZWM_EXTRACT_CACHE
+#: environment variable, or pass `cache_dir`; pass None to disable caching.
+DEFAULT_CACHE_DIR = os.environ.get(
+    "NZWM_EXTRACT_CACHE", os.path.join(tempfile.gettempdir(), "nz_wealth_extract_cache")
+)
+
+#: A save that trips the Sheets per-minute quota is worth retrying: the extraction
+#: behind it has already been paid for.
+SAVE_MAX_ATTEMPTS = 4
+SAVE_BACKOFF_SECONDS = 2.0
+
+#: Substrings that mark a save error as rate limiting rather than a real failure.
+RETRYABLE_SAVE_ERRORS = ("429", "quota exceeded", "rate limit", "try again later")
+
+#: Sentinel: resolve DEFAULT_CACHE_DIR when the call is made, not when this module
+#: is imported, so redirecting the cache (a test, or a run pointed at a project
+#: folder) takes effect without every caller having to pass it through.
+_USE_DEFAULT_CACHE = object()
 
 
 class Status:
@@ -71,6 +100,7 @@ class BatchItem:
     error: str | None = None
     save_result: str | None = None
     completeness: tuple[int, int] | None = None
+    from_cache: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -191,20 +221,78 @@ def worth_extracting(items: list[BatchItem]) -> list[BatchItem]:
     return [i for i in items if i.kind != "administrative"]
 
 
+def cache_key(pdf_bytes: bytes, model: str) -> str:
+    """Content hash plus model.
+
+    Keyed on the bytes, not the filename, so a renamed file still hits and two
+    copies of one report are extracted once. The model is part of the key because a
+    cross-check run under a different model must never read another model's answer.
+    """
+    digest = hashlib.sha256(pdf_bytes).hexdigest()[:16]
+    safe_model = re.sub(r"[^A-Za-z0-9._-]", "_", model or "default")
+    return f"{digest}_{safe_model}.json"
+
+
+def load_cached(cache_dir: str | None, pdf_bytes: bytes,
+                model: str = DEFAULT_MODEL) -> SyndicateReport | None:
+    """The cached report, or None. Never raises: a bad cache is a miss, not a failure."""
+    if not cache_dir:
+        return None
+    path = os.path.join(cache_dir, cache_key(pdf_bytes, model))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return SyndicateReport.model_validate_json(handle.read())
+    except Exception:  # noqa: BLE001 - absent, unreadable or stale: extract again
+        return None
+
+
+def store_cached(cache_dir: str | None, pdf_bytes: bytes, report: SyndicateReport,
+                 model: str = DEFAULT_MODEL) -> str | None:
+    """Write a report to the cache. Never raises: caching must not sink a run.
+
+    Written to a temporary file and moved into place, so an interrupted write cannot
+    leave a half-written file that later reads as a cache hit.
+    """
+    if not cache_dir:
+        return None
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        path = os.path.join(cache_dir, cache_key(pdf_bytes, model))
+        temp = f"{path}.{os.getpid()}.tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            handle.write(report.model_dump_json())
+        os.replace(temp, path)
+        return path
+    except Exception:  # noqa: BLE001 - a full or read-only disk must not stop extraction
+        return None
+
+
 def extract_one(item: BatchItem, pdf_bytes: bytes, baseline_rows: list[dict],
-                api_key: str | None = None, model: str = DEFAULT_MODEL) -> BatchItem:
+                api_key: str | None = None, model: str = DEFAULT_MODEL,
+                cache_dir: str | None = _USE_DEFAULT_CACHE) -> BatchItem:
     """Extract a single document, recording failure rather than raising.
 
     Never lets an exception escape: a batch of thirty must not stop on one bad
     file, and a document that fails still deserves a readable reason.
     """
+    if cache_dir is _USE_DEFAULT_CACHE:
+        cache_dir = DEFAULT_CACHE_DIR
+
+    report = load_cached(cache_dir, pdf_bytes, model)
+    if report is not None:
+        item.from_cache = True
+        item.notes.append("Loaded from the extraction cache; no API call was made.")
     try:
-        report = extract_report(
-            pdf_bytes=pdf_bytes,
-            api_key=api_key,
-            syndicate_name=_canonical_name(item.syndicate_id, baseline_rows),
-            model=model,
-        )
+        if report is None:
+            report = extract_report(
+                pdf_bytes=pdf_bytes,
+                api_key=api_key,
+                syndicate_name=_canonical_name(item.syndicate_id, baseline_rows),
+                model=model,
+            )
+            # Cached before anything else touches it: from here on a crash, a rate
+            # limit or a failed save costs time, not money.
+            store_cached(cache_dir, pdf_bytes, report, model)
     except ExtractionError as e:
         item.status = Status.FAILED
         item.error = str(e)
@@ -286,9 +374,27 @@ def _canonical_name(syndicate_id: str | None, baseline_rows: list[dict]) -> str 
     return None
 
 
+def already_cached(documents: dict[str, bytes], model: str = DEFAULT_MODEL,
+                   cache_dir: str | None = _USE_DEFAULT_CACHE) -> set[str]:
+    """Filenames whose extraction is already on disk, so a run would not pay for them.
+
+    Lets the cost preview say what the run will actually cost rather than what a
+    cold run would, which matters most when re-running after a failure.
+    """
+    if cache_dir is _USE_DEFAULT_CACHE:
+        cache_dir = DEFAULT_CACHE_DIR
+    if not cache_dir:
+        return set()
+    return {
+        name for name, pdf_bytes in documents.items()
+        if os.path.exists(os.path.join(cache_dir, cache_key(pdf_bytes, model)))
+    }
+
+
 def run_batch(documents: dict[str, bytes], baseline_rows: list[dict],
               api_key: str | None = None, model: str = DEFAULT_MODEL,
-              on_progress=None) -> list[BatchItem]:
+              on_progress=None,
+              cache_dir: str | None = _USE_DEFAULT_CACHE) -> list[BatchItem]:
     """Extract every document. `documents` maps filename to PDF bytes.
 
     Returns one BatchItem per document, in the order given, whatever happened to
@@ -301,7 +407,8 @@ def run_batch(documents: dict[str, bytes], baseline_rows: list[dict],
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOCUMENTS) as pool:
         futures = {
             pool.submit(
-                extract_one, item, documents[item.filename], baseline_rows, api_key, model
+                extract_one, item, documents[item.filename], baseline_rows, api_key,
+                model, cache_dir,
             ): item
             for item in items
         }
@@ -339,18 +446,45 @@ def save_batch(items: list[BatchItem], spreadsheet=None, model: str = DEFAULT_MO
         if item.status == Status.SAVED:
             continue
         try:
-            item.save_result = save_report(
+            item.save_result = _save_with_retry(item, model, spreadsheet)
+            item.status = Status.SAVED
+        except Exception as e:  # noqa: BLE001 - one bad write must not stop the rest
+            item.status = Status.FAILED
+            item.error = f"Save failed: {e}. The extraction is cached, so re-running "
+            item.error += "saves it without paying to extract it again."
+    return items
+
+
+def _is_retryable(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in RETRYABLE_SAVE_ERRORS)
+
+
+def _save_with_retry(item: BatchItem, model: str, spreadsheet) -> str:
+    """Save one row, backing off on the Sheets per-minute quota.
+
+    Only rate limiting is retried. A malformed row or a missing column is a real
+    error and retrying it just wastes a minute before failing anyway.
+    """
+    delay = SAVE_BACKOFF_SECONDS
+    for attempt in range(1, SAVE_MAX_ATTEMPTS + 1):
+        try:
+            return save_report(
                 item.report,
                 syndicate_id=item.syndicate_id,
                 source_filename=item.filename,
                 model=model,
                 spreadsheet=spreadsheet,
             )
-            item.status = Status.SAVED
-        except Exception as e:  # noqa: BLE001 - one bad write must not stop the rest
-            item.status = Status.FAILED
-            item.error = f"Save failed: {e}"
-    return items
+        except Exception as error:  # noqa: BLE001 - classified, then re-raised or retried
+            if attempt == SAVE_MAX_ATTEMPTS or not _is_retryable(error):
+                raise
+            item.notes.append(
+                f"Save attempt {attempt} hit a rate limit; retrying in {delay:.0f}s."
+            )
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def summarise(items: list[BatchItem]) -> dict:
