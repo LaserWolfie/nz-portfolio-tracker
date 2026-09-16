@@ -1321,11 +1321,32 @@ can never displace a newer one. Of 26 LVR comparisons, the 18 new rows changed e
 **one** thing: Warrawong Plaza now compares against large format retail rather than an
 all-sector figure.
 
-**The real fix is on the comparison side, not the data side**: report *every* applicable
-benchmark per metric instead of a single winner, so Centuria Industrial's 45.7% is shown
-against Goodman 19.8% *and* PFI 34.2% together. `applicable()` can stay as it is for the
-single-winner view that `coverage()` needs. Until then, read a Goodman LVR comparison with
-its basis note in hand.
+### Every applicable benchmark, not one winner ✅ built
+
+`industry.applicable_all()` returns every benchmark that fairly applies -- sector-specific
+first, then newest -- and `compare_cohort(..., all_sources=True)` produces one comparison
+per reference. `applicable()` is untouched, because `coverage()` still needs a single
+winner. All three refusals still hold: metric must match, sector must match or be `All`,
+and nothing dated after the period being judged is applied.
+
+On the live cohort this turns 102 comparisons into 346, and **100 of 102 (syndicate, metric)
+pairs now have more than one reference**. What it changes is the size of a finding:
+
+| Centuria Industrial gearing 45.7% | vs | Gap |
+|---|---|---|
+| Goodman NZ, Industrial, 31 Mar 2026 | 19.8% | **+25.9** |
+| Property for Industry, Industrial, 31 Dec 2025 | 34.2% | +11.5 |
+| Argosy, All, 30 Sep 2025 | 35.9% | +9.8 |
+| Argosy, All, 31 Mar 2026 | 37.2% | +8.5 |
+
+The honest statement is "9 to 12 points above listed vehicles", not "26 points above the
+market". `spread()` reports the low, high and count per (syndicate, metric) so a wide
+spread is visible before a number is quoted: every industrial syndicate's gearing spans
+19.8-37.2%, and rent reversion spans -19.5% to -7.3%.
+
+Where a syndicate beats *every* reference, the finding is solid -- Airpark's 17.1% gearing
+beats all four. Where it beats none, that is also solid: Centuria Industrial, Penrose,
+Montreal, Jasper Industrial and Surplus Brokers are above all four on gearing.
 
 ## Cross-checking extractions with a second model
 

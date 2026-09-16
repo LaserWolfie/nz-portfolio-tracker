@@ -152,9 +152,47 @@ def applicable(benchmarks: list[Benchmark], holding: Holding, metric_key: str,
     return max(pool, key=lambda b: (not b.applies_to_all_sectors, b.period_end))
 
 
+def applicable_all(benchmarks: list[Benchmark], holding: Holding, metric_key: str,
+                   as_at: str | None = None) -> list[Benchmark]:
+    """EVERY benchmark that may fairly be applied, sector-specific first then newest.
+
+    `applicable()` returns one winner, which is what a coverage count needs. But one
+    winner can mislead: Goodman's 19.8% look-through gearing is the most recent
+    industrial benchmark and follows $700m of asset sales, so on its own it makes every
+    industrial syndicate look 20-29 points worse than a fairer comparator would. Showing
+    Goodman AND Property for Industry's 34.2% together is the honest presentation --
+    the reader can see the spread between references rather than trusting one.
+
+    The refusals still hold: the metric must match, the sector must match or be "All",
+    and a benchmark dated after the period being judged is never applied.
+    """
+    sector = holding.sector.strip().lower()
+    as_at = as_at or holding.period_end
+    fair = [
+        b for b in benchmarks
+        if b.metric == metric_key
+        and (b.applies_to_all_sectors or b.sector.strip().lower() == sector)
+        and (not b.period_end or b.period_end <= as_at)
+    ]
+    # Sector-specific first, then most recent: the order a reader should weigh them in.
+    return sorted(fair, key=lambda b: (b.applies_to_all_sectors, _negate(b.period_end)))
+
+
+def _negate(period_end: str) -> tuple:
+    """Sort key that puts the most recent period first without reversing the whole sort."""
+    return tuple(-int(part) for part in period_end.split("-")) if period_end else (0,)
+
+
 def compare_cohort(cohort: list[Holding], benchmarks: list[Benchmark],
-                   metric_keys: list[str] | None = None) -> list[Comparison]:
-    """Every holding against every benchmark that fairly applies to it."""
+                   metric_keys: list[str] | None = None,
+                   all_sources: bool = False) -> list[Comparison]:
+    """Every holding against the benchmarks that fairly apply to it.
+
+    By default one comparison per metric, against the single benchmark `applicable()`
+    chooses. With `all_sources=True`, one comparison per applicable benchmark, so a
+    metric with three references produces three rows -- see `applicable_all()` for why
+    that matters.
+    """
     keys = metric_keys or list(METRICS_BY_KEY)
     out = []
     for holding in cohort:
@@ -165,10 +203,37 @@ def compare_cohort(cohort: list[Holding], benchmarks: list[Benchmark],
             value = holding.value(metric)
             if value is None:
                 continue
-            bench = applicable(benchmarks, holding, key)
-            if bench is None:
-                continue
-            out.append(Comparison(holding.syndicate_id, holding.name, key, value, bench))
+            if all_sources:
+                chosen = applicable_all(benchmarks, holding, key)
+            else:
+                one = applicable(benchmarks, holding, key)
+                chosen = [one] if one else []
+            for bench in chosen:
+                out.append(Comparison(holding.syndicate_id, holding.name, key, value, bench))
+    return out
+
+
+def spread(comparisons: list[Comparison]) -> dict:
+    """Per (syndicate, metric), the range of benchmark values it was measured against.
+
+    A wide spread is a warning that the single-winner view is doing a lot of work: if
+    industrial gearing references run from 19.8% to 34.2%, no one number is "the"
+    benchmark, and a 26-point gap to the newest one is not a finding on its own.
+    """
+    grouped: dict[tuple[str, str], list[Comparison]] = {}
+    for c in comparisons:
+        grouped.setdefault((c.syndicate_id, c.metric), []).append(c)
+    out = {}
+    for key, group in grouped.items():
+        values = [c.benchmark.value for c in group]
+        out[key] = {
+            "portfolio_value": group[0].portfolio_value,
+            "n_benchmarks": len(group),
+            "low": min(values),
+            "high": max(values),
+            "sources": [c.benchmark.source for c in group],
+            "better_against": sum(1 for c in group if c.is_better),
+        }
     return out
 
 

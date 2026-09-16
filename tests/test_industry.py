@@ -9,9 +9,11 @@ from modules.industry import (
     Benchmark,
     BenchmarkError,
     applicable,
+    applicable_all,
     compare_cohort,
     coverage,
     parse_benchmarks,
+    spread,
 )
 
 import pytest
@@ -142,3 +144,64 @@ class TestCoverage:
     def test_an_empty_benchmark_tab_yields_no_coverage(self):
         cohort = _cohort(lvr_percent=46.0)
         assert all(covered == 0 for _, covered, _ in coverage(cohort, []))
+
+
+class TestEveryApplicableBenchmark:
+    """One winner can mislead. Goodman's 19.8% gearing is the newest industrial
+    reference and follows $700m of asset sales; shown alone it makes every industrial
+    syndicate look 20-29 points worse than a fairer comparator would."""
+
+    GEARING = [
+        _row(metric="lvr_percent", sector="Industrial", period_end="2026-03-31", value=19.8,
+             source="Goodman NZ Annual Report 2026", basis_notes="look-through LVR"),
+        _row(metric="lvr_percent", sector="Industrial", period_end="2025-12-31", value=34.2,
+             source="PFI FY26 Interim Report", basis_notes="gearing at 31 Dec 2025"),
+        _row(metric="lvr_percent", sector="All", period_end="2025-09-30", value=35.9,
+             source="Argosy FY26 Interim", basis_notes="debt to total assets"),
+    ]
+
+    def _cohort_industrial(self):
+        return _cohort(sector="Industrial", lvr_percent=45.7)
+
+    def test_all_sources_reports_every_reference(self):
+        benchmarks = parse_benchmarks(self.GEARING)
+        one = compare_cohort(self._cohort_industrial(), benchmarks, ["lvr_percent"])
+        many = compare_cohort(self._cohort_industrial(), benchmarks, ["lvr_percent"],
+                              all_sources=True)
+        assert len(one) == 1, "the default stays a single winner"
+        assert {c.benchmark.value for c in many} == {19.8, 34.2, 35.9}
+
+    def test_sector_specific_comes_before_all_sectors(self):
+        got = applicable_all(parse_benchmarks(self.GEARING),
+                             self._cohort_industrial()[0], "lvr_percent")
+        assert [b.sector for b in got] == ["Industrial", "Industrial", "All"]
+
+    def test_within_a_sector_the_newest_is_listed_first(self):
+        got = applicable_all(parse_benchmarks(self.GEARING),
+                             self._cohort_industrial()[0], "lvr_percent")
+        assert [b.period_end for b in got[:2]] == ["2026-03-31", "2025-12-31"]
+
+    def test_a_future_benchmark_is_still_excluded(self):
+        rows = self.GEARING + [
+            _row(metric="lvr_percent", sector="Industrial", period_end="2026-06-30", value=34.2,
+                 source="PFI FY26 Annual", basis_notes="gearing at 30 Jun 2026")
+        ]
+        got = applicable_all(parse_benchmarks(rows), self._cohort_industrial()[0], "lvr_percent")
+        assert "2026-06-30" not in [b.period_end for b in got], "hindsight is still refused"
+
+    def test_a_cross_sector_benchmark_is_still_excluded(self):
+        rows = self.GEARING + [
+            _row(metric="lvr_percent", sector="Childcare", period_end="2026-01-31", value=60.0,
+                 source="Childcare survey", basis_notes="childcare gearing")
+        ]
+        got = applicable_all(parse_benchmarks(rows), self._cohort_industrial()[0], "lvr_percent")
+        assert "Childcare" not in [b.sector for b in got]
+
+    def test_spread_shows_how_much_the_single_winner_was_doing(self):
+        comparisons = compare_cohort(self._cohort_industrial(), parse_benchmarks(self.GEARING),
+                                     ["lvr_percent"], all_sources=True)
+        summary = spread(comparisons)[("A", "lvr_percent")]
+        assert summary["n_benchmarks"] == 3
+        assert (summary["low"], summary["high"]) == (19.8, 35.9)
+        assert summary["portfolio_value"] == 45.7
+        assert summary["better_against"] == 0, "45.7% gearing beats none of the three"
