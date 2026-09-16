@@ -1289,6 +1289,44 @@ WALT by more than two years. Cap rates above Precinct's read as conservative, bu
 gap is simply secondary stock against premium CBD towers. Still zero benchmarks for capex,
 cash, fees, vacancy and lease incentives.
 
+### Half-year rows added, and why they did not fix the Goodman problem
+
+**47 usable benchmark rows** after adding Argosy's FY26 interim (30 Sep 2025) and PFI's FY26
+interim (31 Dec 2025), read from the companies' own presentation and interim report.
+
+Argosy's interim breaks the portfolio down **by sector**, which is better than an `All` row:
+
+| Sector | Occupancy | WALT | Cap rate |
+|---|---|---|---|
+| Industrial | 99.4% by income | 4.8y | 6.24% |
+| Office | 91.6% by income | 6.3y | 6.42% |
+| Large format retail | 97.7% | 4.7y | 6.49% |
+
+Whole portfolio at 30 Sep 2025: occupancy 95.6% **by rent**, WALT 5.4y, cap rate 6.33%,
+gearing **35.9% on debt to total assets** (Argosy's own label for it), payout 97% to AFFO,
+**under-rented 7.3%**. PFI at 31 Dec 2025: occupancy 99.9%, WALT 5.37y, gearing 34.2%; its
+interim report states **no** portfolio cap rate and no under-renting percentage, so neither
+was invented.
+
+**Watch which period a figure belongs to.** Argosy is 7.3% under-rented at the half year and
+**9.3%** at FY26. A web search returned the annual figure for a half-year query; only the
+presentation settled it. Two figures for one metric, six months apart, is exactly how an
+argument with a manager gets lost.
+
+**The rows did not achieve what they were added for.** The aim was to stop the March
+industrial rows being measured against Goodman's 19.8% look-through gearing. They do not,
+because `applicable()` picks the most recent benchmark that is not in the future, and
+Goodman's 31 Mar 2026 beats PFI's 31 Dec 2025 and Argosy's 30 Sep 2025. Adding older rows
+can never displace a newer one. Of 26 LVR comparisons, the 18 new rows changed exactly
+**one** thing: Warrawong Plaza now compares against large format retail rather than an
+all-sector figure.
+
+**The real fix is on the comparison side, not the data side**: report *every* applicable
+benchmark per metric instead of a single winner, so Centuria Industrial's 45.7% is shown
+against Goodman 19.8% *and* PFI 34.2% together. `applicable()` can stay as it is for the
+single-winner view that `coverage()` needs. Until then, read a Goodman LVR comparison with
+its basis note in hand.
+
 ## Cross-checking extractions with a second model
 
 `scripts/crosscheck_fable.py` re-extracts the stored PDFs with a different model and diffs
