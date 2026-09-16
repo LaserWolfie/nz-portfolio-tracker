@@ -475,6 +475,47 @@ matches "Building B Graham Street Limited Partnership".
 
 Measured: two real documents, 22s wall clock, ~$1.60.
 
+### Rehearsing the September intake, 2026-09-16
+
+`plan_batch()` run over last cycle's 55 real filenames, and then over the same names
+rewritten to 30 September 2026 dates. No API calls, nothing written.
+
+**Date handling is sound: 0 of 55 matched differently once the dates changed.** That was
+the main risk for a half-yearly cycle, and the noise list already absorbs it.
+
+**The misses clustered on the managers who email documents rather than file them.** Of the
+31 genuine syndicate documents, 20 matched. Three fixes took that to 28, and the full sweep
+from 29 unmatched down to 17 — every one of the 17 now genuinely not a syndicate report
+(insurance policies, tax returns, bank statements, Vickers Road which is *not* ours,
+Westpoint which is sold, Merx the debt fund):
+
+- **Diacritics are folded in `_normalise()`.** The manager writes `Ōhanga Properties LP`,
+  the sheet records `Ohanga`, and the macron lost the match every time. Macrons are common
+  in NZ entity names and typed inconsistently, so they cannot be significant.
+- **`+` is punctuation.** Erskine & Owen's portal joins every word with it
+  (`EO+Quarterly+Report_FY26_Q4_NZ+Daycare+Properties+Fund+LP.pdf`), which arrived as one
+  token and matched nothing. `name_from_filename()` splits on it and `_normalise()` folds
+  it, so `E+O` and `E O` are the same manager.
+- **Period tags are stripped in every shape** managers use: `FY26`, `FY 2026`, `FY27Q1`,
+  `Q1`. A test guards that this does not eat meaningful digits — `22SYR` and `33 Broadway`
+  keep theirs.
+
+**A nested name is not an ambiguity.** Govt Income 1 carries the alias `Centuria Government
+Income Property Fund`, which is a **prefix** of No. 2's alias, so both No. 2 documents hit
+two rows and `resolve_syndicate_id()` correctly refused to guess. Where every rival's
+matched text sits *inside* the longest match, the longest one is now taken as the specific
+answer; anything else still returns `None`. Two buildings sharing a `Graham Street` alias
+are not nested, and still refuse to resolve.
+
+Nine aliases were added through `scripts/manage_aliases.py`: `SWPD`, the two Ōhanga forms,
+`22 Saleyards Road Scheme` / `SYR` / `22SYR`, `MP Innovation Limited Partnership`,
+`Montreal Property Syndicate LP` and `Industrial Income Plus Fund`.
+
+**One file stays unmatched by design.** `GROUP REALTY LIMITED - Performance Report - June
+30, 2026.pdf` names the *owner company*, not the syndicate — it is Jasper Industrial Income
+Plus. No filename rule can fix that; the entity name inside the document resolves it during
+extraction, which is exactly why the document outranks the filename.
+
 ### Phase 5 — Narrative ✅ done
 
 `modules/narrative.py` drafts a per-syndicate note and manager questions, plus a

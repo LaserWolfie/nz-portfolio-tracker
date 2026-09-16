@@ -16,6 +16,7 @@ The period columns are derived from `SyndicateReport` itself, so adding a field
 to the schema extends the sheet rather than silently dropping the new data.
 """
 
+import unicodedata
 from datetime import datetime, timezone
 
 from modules import sheets
@@ -270,11 +271,18 @@ LEGAL_SUFFIXES = {"limited", "ltd", "the", "lp", "partnership", "l.p"}
 
 
 def _normalise(name: str) -> str:
-    """Loose comparison key: case, punctuation and legal suffixes vary by document."""
+    """Loose comparison key: case, punctuation and legal suffixes vary by document.
+
+    Diacritics are folded, so the manager's `Ōhanga Properties LP` reaches a sheet
+    that records `Ohanga`. Macrons are common in NZ entity names and are typed
+    inconsistently; treating them as significant loses the match every time.
+    """
     if not name:
         return ""
-    text = str(name).lower()
-    for noise in (",", ".", "(", ")", "'", "’", "-", "  "):
+    decomposed = unicodedata.normalize("NFD", str(name))
+    text = "".join(c for c in decomposed if unicodedata.category(c) != "Mn").lower()
+    # '+' is punctuation here: Erskine & Owen write "E+O", the sheet writes "E O".
+    for noise in (",", ".", "(", ")", "'", "’", "-", "+", "  "):
         text = text.replace(noise, " ")
     words = [w for w in text.split() if w not in LEGAL_SUFFIXES]
     return " ".join(words)
@@ -322,12 +330,34 @@ def resolve_syndicate_id(entity_name: str, baseline_rows: list[dict]) -> str | N
     # Trust" against a baseline holding "St Georges Bay Road". Aliases are
     # searched too: a holding recorded under its tenant keeps that name as an
     # alias, so "Cedenco Update 2026" must still reach Williams Street.
-    partial = {
-        str(row.get("syndicate_id"))
-        for row in baseline_rows
-        if any(name in target or target in name for name in names_of(row))
-    }
-    return sole(partial)
+    matched: dict[str, str] = {}
+    for row in baseline_rows:
+        hits = [name for name in names_of(row) if name in target or target in name]
+        if not hits:
+            continue
+        syndicate_id = str(row.get("syndicate_id"))
+        longest = max(hits, key=len)
+        if len(longest) > len(matched.get(syndicate_id, "")):
+            matched[syndicate_id] = longest
+
+    if len(matched) == 1:
+        return next(iter(matched))
+
+    # A nested name is not a real ambiguity. "Centuria Government Income Property
+    # Fund" is a PREFIX of "Centuria Government Income Property Fund No. 2", so a
+    # document naming No. 2 hits both rows. Where every rival's matched text sits
+    # inside the longest match, the longest one is the specific answer rather than
+    # a coin toss. Anything else still returns None: filing a report against the
+    # wrong syndicate corrupts two histories at once.
+    if len(matched) > 1:
+        ranked = sorted(matched.items(), key=lambda pair: len(pair[1]), reverse=True)
+        best_id, best_name = ranked[0]
+        runner_up = ranked[1][1]
+        if len(best_name) > len(runner_up) and all(
+            name in best_name for _, name in ranked[1:]
+        ):
+            return best_id
+    return None
 
 
 # --------------------------------------------------------------------------

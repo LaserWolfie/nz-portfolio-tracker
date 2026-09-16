@@ -265,3 +265,48 @@ class _Swap:
     def __init__(self, expiry_date, notional_amount):
         self.expiry_date = expiry_date
         self.notional_amount = notional_amount
+
+
+class TestNameMatchingQuirks:
+    """Real failures from the September dry run over last cycle's filenames."""
+
+    ROWS = [
+        {"syndicate_id": "MYFA-OHANGA", "canonical_name": "Ohanga",
+         "aliases": "Ohanga Properties LP"},
+        {"syndicate_id": "ESKI-HEATHCARE", "canonical_name": "E+O Heathcare Fund",
+         "aliases": "E+O Healthcare Properties Fund LP"},
+        {"syndicate_id": "CENT-GOVT1", "canonical_name": "Centuria Govt Income 1",
+         "aliases": "Centuria Government Income Property Fund"},
+        {"syndicate_id": "CENT-GOVT2", "canonical_name": "Centuria Govt Income 2",
+         "aliases": "Centuria Government Income Property Fund No. 2"},
+        {"syndicate_id": "CENT-BUILDINGA", "canonical_name": "Building A Graham Street LP",
+         "aliases": "Graham Street"},
+        {"syndicate_id": "CENT-BUILDINGB", "canonical_name": "Building B Graham Street LP",
+         "aliases": "Graham Street"},
+    ]
+
+    def test_a_macron_does_not_lose_the_match(self):
+        """The manager writes 'Ōhanga'; the sheet records 'Ohanga'."""
+        assert resolve_syndicate_id("Ōhanga Properties LP", self.ROWS) == "MYFA-OHANGA"
+
+    def test_plus_is_punctuation_not_a_letter(self):
+        """'E+O' and 'E O' are the same manager."""
+        assert resolve_syndicate_id("E O Healthcare Properties Fund LP",
+                                    self.ROWS) == "ESKI-HEATHCARE"
+
+    def test_a_nested_name_resolves_to_the_specific_one(self):
+        """Govt Income 1's alias is a PREFIX of No. 2's, so a No. 2 document hits both.
+
+        The longer match is the specific answer, not a coin toss -- this is the
+        Govt Income 1-vs-2 trap the ids themselves are designed around.
+        """
+        target = "Centuria Government Income Property Fund No.2 Fund"
+        assert resolve_syndicate_id(target, self.ROWS) == "CENT-GOVT2"
+
+    def test_the_shorter_name_still_resolves_on_its_own(self):
+        assert resolve_syndicate_id("Centuria Government Income Property Fund",
+                                    self.ROWS) == "CENT-GOVT1"
+
+    def test_a_genuine_ambiguity_still_refuses_to_guess(self):
+        """Two buildings sharing an alias are not nested: filing either would be a guess."""
+        assert resolve_syndicate_id("Graham Street Valuation 2026", self.ROWS) is None

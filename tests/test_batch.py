@@ -470,3 +470,39 @@ class TestCostPreview:
     def test_no_cache_means_everything_costs(self, augusta):
         documents = {"a.pdf": b"%PDF-a", "b.pdf": b"%PDF-b"}
         assert batch.already_cached(documents, cache_dir=None) == set()
+
+
+class TestFilenameQuirksFromTheDryRun:
+    """Filenames that matched nothing when the September intake was rehearsed."""
+
+    ROWS = [
+        {"syndicate_id": "ESKI-DAYCARE", "canonical_name": "E+O N.Z. Daycare Fund",
+         "aliases": "NZ Daycare Properties Fund LP"},
+        {"syndicate_id": "CENT-AIRWAYSSOE",
+         "canonical_name": "Sir William Pickering Drive Limited Partnership",
+         "aliases": "SWPD"},
+        {"syndicate_id": "SILV-SURPLUSBROKE", "canonical_name": "Surplus Brokers",
+         "aliases": "22SYR|SYR"},
+    ]
+
+    def test_plus_separated_filenames_are_read(self):
+        """Erskine & Owen's portal joins every word with '+'."""
+        name = name_from_filename("EO+Quarterly+Report_FY26_Q4_NZ+Daycare+Properties+Fund+LP.pdf")
+        assert "Daycare" in name
+        assert plan_batch([
+            "EO+Quarterly+Report_FY26_Q4_NZ+Daycare+Properties+Fund+LP.pdf"
+        ], self.ROWS)[0].syndicate_id == "ESKI-DAYCARE"
+
+    def test_period_tags_are_stripped_in_every_shape(self):
+        assert name_from_filename("FY26 Q1 22SYR.pdf") == "22SYR"
+        assert name_from_filename("SWPD_-_FY26_Annual_Report.pdf") == "SWPD"
+        assert "FY27Q1" not in name_from_filename("EO+Report+FY27Q1+Montreal.pdf")
+
+    def test_an_abbreviation_matches_through_its_alias(self):
+        assert plan_batch(["SWPD_-_FY26_Annual_Report.pdf"],
+                          self.ROWS)[0].syndicate_id == "CENT-AIRWAYSSOE"
+
+    def test_meaningful_numbers_still_survive_the_tag_stripping(self):
+        """'22SYR' and '33 Broadway' must not lose their digits to a period tag regex."""
+        assert "22SYR" in name_from_filename("FY26 Q1 22SYR.pdf")
+        assert "33" in name_from_filename("33_Broadway_-_FY26_Annual_Report.pdf")

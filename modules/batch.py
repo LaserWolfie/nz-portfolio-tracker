@@ -118,7 +118,12 @@ def name_from_filename(filename: str) -> str:
     reduces to the entity name.
     """
     stem = os.path.splitext(os.path.basename(filename))[0]
-    text = stem.replace("_", " ").replace("-", " ")
+    # Erskine & Owen's portal joins words with '+', so without this the whole
+    # filename arrives as a single token and matches nothing.
+    text = stem.replace("_", " ").replace("-", " ").replace("+", " ")
+    # Period tags in any of the shapes managers use: FY26, FY 2026, FY27Q1, Q1.
+    text = re.sub(r"(?i)\bfy\s?\d{2,4}\s*(q[1-4])?\b", " ", text)
+    text = re.sub(r"(?i)\bq[1-4]\b", " ", text)
     noise = {
         # Report types. "biannual" matters: NZ syndicates report half-yearly at
         # 31 March and 30 September, so it appears on most periodic reports.
