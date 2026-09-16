@@ -1416,8 +1416,21 @@ thousands is still a ratio — so nothing else in the pipeline noticed, and only
 figures are wrong, by a factor of a thousand.
 
 `deltas._rule_figures_in_thousands` now flags any valuation below `IMPLAUSIBLE_VALUATION`
-($1m): too small to be a property syndicate, so the table was probably in thousands. It
-fires on exactly one stored row today.
+($1m): too small to be a property syndicate, so the table was probably in thousands.
+
+**The row was corrected on 2026-09-16** and the flag now fires on nothing. Seven fields the
+statements print in $'000 were multiplied by 1,000: valuation, cash, total_debt,
+adjusted_operating_profit, capex_spent, lease_incentives_paid, manager_fee_total_dollars.
+Four were deliberately left: `nta_per_unit` (0.9324 is dollars per unit), the two swap
+notionals (already converted at extraction), and the percentages, which were ratios of two
+thousands figures and so were never wrong. `raw_json` stays verbatim as the record of what
+the extractor returned; the correction is described in `extraction_notes`.
+
+**The extractor had already said so.** Its note reads "recorded exactly as printed in the
+financial statements, which are stated in $'000 (i.e. $153.98m, $60.475m...)". The figures
+were right and self-documented; the storage layer carried the printed number through
+without the scale. Where a report states its own units, the extraction note is the place
+that says so -- worth reading before trusting a dollar figure that looks small.
 
 ## Cross-checking extractions with a second model
 
