@@ -107,6 +107,12 @@ class TestFlatten:
         assert row["swap_count"] == 4
         assert row["earliest_swap_expiry"] == "2026-06-05"
         assert row["total_swap_notional"] == pytest.approx(66_875_000)
+        # All four of Augusta's swaps were still running at the 31 Mar 2026 balance date
+        # (the earliest expires 5 Jun 2026), so live equals total here. Note the live
+        # notional is 125% of the $53.5m debt: these swaps are staggered, which is why
+        # the hedging rule refuses to read a point-in-time hedged share from a sum.
+        assert row["live_swap_notional"] == pytest.approx(66_875_000)
+        assert row["live_swap_count"] == 4
         assert len(json.loads(row["raw_json"])["debt"]["swap_expiries"]) == 4
 
     def test_fees_total_both_bases(self, augusta):
@@ -209,3 +215,53 @@ class TestUpsert:
     def test_period_row_requires_identity(self):
         with pytest.raises(StorageError, match="syndicate_id and period_end"):
             upsert_period(self._sheet(), {"valuation": 115})
+
+
+class TestLiveHedging:
+    """Only swaps still running at the period end can hedge anything."""
+
+    def test_expired_swaps_are_excluded(self):
+        from modules.storage import _live_hedging
+
+        swaps = [
+            _Swap("2025-06-05", 10_000_000),   # expired before the period end
+            _Swap("2027-06-05", 25_000_000),   # still running
+        ]
+        assert _live_hedging(swaps, "2026-03-31") == (25_000_000.0, 1)
+
+    def test_all_expired_is_a_real_zero(self):
+        from modules.storage import _live_hedging
+
+        swaps = [_Swap("2025-06-05", 10_000_000), _Swap("2026-01-05", 5_000_000)]
+        assert _live_hedging(swaps, "2026-03-31") == (0.0, 0)
+
+    def test_no_swaps_mentioned_is_unknown_not_zero(self):
+        from modules.storage import _live_hedging
+
+        assert _live_hedging([], "2026-03-31") == (None, None)
+
+    def test_missing_expiry_date_makes_it_unknown(self):
+        """Without an expiry there is no telling which swaps are still live."""
+        from modules.storage import _live_hedging
+
+        assert _live_hedging([_Swap(None, 10_000_000)], "2026-03-31") == (None, None)
+
+    def test_live_swap_without_a_notional_is_unknown(self):
+        """A partial sum would understate the hedge and manufacture a breach."""
+        from modules.storage import _live_hedging
+
+        swaps = [_Swap("2027-06-05", None), _Swap("2027-09-05", 5_000_000)]
+        assert _live_hedging(swaps, "2026-03-31")[0] is None
+
+    def test_missing_period_end_is_unknown(self):
+        from modules.storage import _live_hedging
+
+        assert _live_hedging([_Swap("2027-06-05", 10_000_000)], None) == (None, None)
+
+
+class _Swap:
+    """Stand-in for schema.SwapExpiry: only the two fields _live_hedging reads."""
+
+    def __init__(self, expiry_date, notional_amount):
+        self.expiry_date = expiry_date
+        self.notional_amount = notional_amount

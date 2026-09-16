@@ -228,6 +228,12 @@ def to_baseline_row(policy: BaselinePolicy) -> dict:
         row["lvr_covenant_threshold"] = policy.debt.lvr_ceiling_percent.value
     if policy.debt.icr_floor.value is not None:
         row["icr_covenant_threshold"] = policy.debt.icr_floor.value
+    if policy.returns.occupancy_floor_percent.value is not None:
+        row["occupancy_floor_percent"] = policy.returns.occupancy_floor_percent.value
+    if policy.returns.nta_floor_percent.value is not None:
+        row["nta_floor_percent"] = policy.returns.nta_floor_percent.value
+    if policy.debt.hedging_minimum_percent.value is not None:
+        row["hedging_minimum_percent"] = policy.debt.hedging_minimum_percent.value
     if policy.identity.sipo_date.value:
         row["im_date"] = policy.identity.sipo_date.value
 

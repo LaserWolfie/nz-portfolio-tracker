@@ -43,6 +43,10 @@ MATERIAL_VALUATION_DROP = 10.0    # percent relative decline
 
 PAYOUT_RATIO_UNSUSTAINABLE = 100.0
 
+# Live swap notional above this share of debt cannot be a point-in-time hedge: the
+# swaps must be staggered or forward-starting.
+HEDGE_SHARE_IMPLAUSIBLE = 100.0
+
 
 class Severity(IntEnum):
     """Ordered so flags sort naturally, most serious first."""
@@ -444,11 +448,96 @@ def _rule_extraction_quality(current, prior, baseline, as_at) -> list[Flag]:
     return []
 
 
+def _rule_hedging_policy(current, prior, baseline, as_at) -> list[Flag]:
+    """The SIPO's hedging minimum against what the report discloses.
+
+    A written policy tested against a disclosed fact, per syndicate, by name. The
+    hedged share is computed only where BOTH the live swap notional and total debt
+    are stated. It reads `live_swap_notional`, not `total_swap_notional`: the latter
+    sums swaps that have already rolled off, which is how a syndicate reads as "179%
+    hedged" against its own debt. A blank there means unknown, never zero.
+    """
+    if not baseline:
+        return []
+    minimum = _num(baseline.get("hedging_minimum_percent"))
+    if minimum is None:
+        return []
+
+    notional = _num(current.get("live_swap_notional"))
+    debt = _num(current.get("total_debt"))
+    if notional is not None and debt:
+        hedged = notional / debt * 100
+        if hedged > HEDGE_SHARE_IMPLAUSIBLE:
+            # More notional than debt means the swaps are staggered or forward-starting:
+            # one starts as another ends. The schema records expiry dates but no start
+            # dates, so a point-in-time hedged share cannot be computed -- and reporting
+            # "complies" from a sum like that would be worse than reporting nothing.
+            return [Flag("hedging_policy_unverifiable", Severity.MEDIUM, "live_swap_notional",
+                         f"Live swap notional is {hedged:.0f}% of debt, so the swaps are "
+                         f"staggered or forward-starting; the share hedged at any one time "
+                         f"cannot be computed, and the SIPO commits to {minimum:.0f}%")]
+        if hedged < minimum:
+            return [Flag("hedging_below_policy", Severity.HIGH, "total_swap_notional",
+                         f"{hedged:.0f}% of debt hedged, against the SIPO's "
+                         f"{minimum:.0f}% minimum", round(hedged, 1))]
+        return []
+
+    expiry = _date(current.get("earliest_swap_expiry"))
+    detail = (f"the earliest swap expired {expiry:%d %b %Y}"
+              if expiry is not None and _months_between(as_at, expiry) < 0
+              else "no live swap notional is disclosed")
+    return [Flag("hedging_policy_unverifiable", Severity.MEDIUM, "total_swap_notional",
+                 f"SIPO commits to hedging at least {minimum:.0f}% of debt; {detail}, "
+                 "so compliance cannot be verified from this report")]
+
+
+def _rule_occupancy_policy(current, prior, baseline, as_at) -> list[Flag]:
+    """Occupancy against the floor the SIPO itself states."""
+    if not baseline:
+        return []
+    floor = _num(baseline.get("occupancy_floor_percent"))
+    occupancy = _num(current.get("occupancy_percent"))
+    if floor is None or occupancy is None:
+        return []
+    if occupancy < floor:
+        return [Flag("occupancy_below_policy", Severity.HIGH, "occupancy_percent",
+                     f"Occupancy {occupancy:.1f}% is below the SIPO's {floor:.0f}% floor",
+                     occupancy)]
+    return []
+
+
+def _rule_nta_policy(current, prior, baseline, as_at) -> list[Flag]:
+    """NTA per unit against the SIPO's floor, which is a share of NTA at acquisition.
+
+    Dormant until `formation_nav_per_unit` is filled. The floor is a percentage OF the
+    formation NTA, and `original_investment_per_unit` is not the same figure -- issue
+    costs mean a $50,000 unit starts below $50,000 of NTA -- so substituting it would
+    manufacture breaches.
+    """
+    if not baseline:
+        return []
+    floor_percent = _num(baseline.get("nta_floor_percent"))
+    formation = _num(baseline.get("formation_nav_per_unit"))
+    nta = _num(current.get("nta_per_unit"))
+    if floor_percent is None or not formation or nta is None:
+        return []
+    floor = formation * floor_percent / 100
+    if nta < floor:
+        share = nta / formation * 100
+        return [Flag("nta_below_policy", Severity.HIGH, "nta_per_unit",
+                     f"NTA {nta:,.2f} per unit is {share:.0f}% of the {formation:,.2f} at "
+                     f"formation, below the SIPO's {floor_percent:.0f}% floor", nta)]
+    return []
+
+
 RULES = [
     _rule_facility_expiry,
     _rule_swap_expiry,
     _rule_icr,
     _rule_lvr,
+    _rule_hedging_policy,
+    _rule_occupancy_policy,
+    _rule_nta_policy,
     _rule_distribution,
     _rule_tenancy,
     _rule_valuation,

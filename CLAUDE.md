@@ -1037,6 +1037,47 @@ that; the schema caught it in `cash_return_basis`. **Check the basis before trea
 gap as a shortfall** — several of these promises are dated, and the SIPOs themselves are
 from 2019–2025.
 
+### The promises are columns now — and two of the three cannot be tested
+
+`to_baseline_row()` wrote the cash return, LVR ceiling and ICR floor into real columns but
+left the occupancy floor, NTA floor and hedging minimum inside the `trust_deed_notes`
+prose, where no rule could reach them. `Syndicate_Baseline` now has
+**`occupancy_floor_percent`, `nta_floor_percent` and `hedging_minimum_percent`**, backfilled
+for the 12 SIPO syndicates by parsing the notes string that `to_baseline_row()` itself wrote
+— free, and no SIPO needed re-extracting. Three rules in `deltas.py` test them:
+`hedging_below_policy` / `hedging_policy_unverifiable`, `occupancy_below_policy`,
+`nta_below_policy`.
+
+**`total_swap_notional` could never have tested a hedging policy.** It sums every swap a
+report lists, expired ones included, which is how Williams Street read as **179% hedged**
+against its own debt. `flatten_report()` now also derives **`live_swap_notional` and
+`live_swap_count`** — the swaps still running at the period end — via `_live_hedging()`,
+which returns three distinguishable things: a number, a real `0.0` when every listed swap
+has expired (the sharpest test there is), and `None` for unknown, including when a live swap
+states no notional, because a partial sum would understate the hedge and manufacture a
+breach. The 27 stored rows were backfilled from `raw_json`.
+
+**Even the live notional exceeds the debt.** Augusta 125%, Williams Street 116%, Airpark
+104%, Pickering Drive 107% — these swaps are staggered or forward-starting, one beginning as
+another ends, and the schema records expiry dates but no start dates. So the rule reports
+`hedging_policy_unverifiable` rather than reading "complies" off a sum that cannot mean what
+it appears to. **All four syndicates that promise a 50% hedging minimum come back
+unverifiable**, which is itself the finding: the commitment cannot be checked from the
+reports the manager publishes.
+
+**The occupancy floor is worse: the two sets are disjoint.** Nine syndicates promise an
+occupancy floor (Centuria's eight plus PMG Direct Office); twelve disclose occupancy (the
+Australian funds, E+O, Jasper, Oyster, MacKersey, Industrial, Diversified). **The overlap is
+zero.** Every scheme that committed to a floor is one that does not publish the number, and
+every manager who publishes it promised nothing. `occupancy_below_policy` therefore fires on
+nothing today — not a bug, and the strongest single question to put to Centuria and PMG.
+
+`nta_below_policy` is **dormant by design**: the floor is a percentage of NTA *at
+acquisition*, `formation_nav_per_unit` is empty for all 30, and
+`original_investment_per_unit` is not the same figure — issue costs mean a $50,000 unit
+starts below $50,000 of NTA, so substituting it would manufacture breaches. Filling
+`formation_nav_per_unit` from each IM or first annual report switches eight syndicates on.
+
 ## Industry_Benchmarks ✅ built
 
 `modules/industry.py` plus an `Industry_Benchmarks` tab. Both external sources — listed NZ

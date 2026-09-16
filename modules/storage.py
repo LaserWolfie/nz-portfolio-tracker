@@ -44,6 +44,11 @@ PERIOD_DERIVED_COLUMNS = [
     "earliest_swap_expiry",
     "total_swap_notional",
     "swap_count",
+    # Only the swaps STILL RUNNING at the period end can hedge anything. Summing
+    # every swap a report lists counts ones that have already rolled off, which is
+    # how a syndicate ends up "179% hedged" against its own debt.
+    "live_swap_notional",
+    "live_swap_count",
     "manager_fee_total_dollars",
     "manager_fee_total_percent",
     "rent_reversion_percent",
@@ -72,6 +77,11 @@ BASELINE_COLUMNS = [
     "original_investment_per_unit",
     "icr_covenant_threshold",
     "lvr_covenant_threshold",
+    # The rest of what a SIPO promises, as columns rather than prose: the delta
+    # engine can only test a promise it can read as a number.
+    "occupancy_floor_percent",
+    "nta_floor_percent",
+    "hedging_minimum_percent",
     "trust_deed_notes",
     "notes",
 ]
@@ -163,6 +173,28 @@ def _earliest(dates: list[str | None]) -> str | None:
     return real[0] if real else None
 
 
+def _live_hedging(swaps, period_end: str | None) -> tuple[float | None, int | None]:
+    """Notional and count of the swaps still running at the period end.
+
+    Three outcomes, and the difference between them matters:
+
+    * a number -- every live swap states its notional, so the hedged share is real;
+    * ``0.0`` -- every swap the report lists has already expired, which is a genuine
+      zero and the sharpest test of a hedging policy there is;
+    * ``None`` -- unknown, because no swaps were mentioned, the period end is missing,
+      or a live swap did not state its notional. A partial sum would understate the
+      hedge and manufacture a breach, so nothing is reported instead.
+    """
+    if not swaps or not period_end:
+        return None, None
+    if any(not s.expiry_date for s in swaps):
+        return None, None
+    live = [s for s in swaps if s.expiry_date > period_end]
+    if any(s.notional_amount is None for s in live):
+        return None, len(live)
+    return float(sum(s.notional_amount for s in live)), len(live)
+
+
 def flatten_report(
     report: SyndicateReport,
     syndicate_id: str,
@@ -204,6 +236,8 @@ def flatten_report(
     notionals = [s.notional_amount for s in swaps if s.notional_amount]
     row["total_swap_notional"] = sum(notionals) if notionals else None
     row["swap_count"] = len(swaps)
+    row["live_swap_notional"], row["live_swap_count"] = _live_hedging(
+        swaps, report.identity.period_end_date.value)
 
     fees = report.conduct.manager_fees
     dollars = [f.amount for f in fees if f.amount]

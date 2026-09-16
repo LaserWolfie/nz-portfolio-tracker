@@ -318,3 +318,94 @@ class TestRanking:
         assert len(reviews) == 1
         assert reviews[0].period_end == "2026-03-31"
         assert "payout_above_earnings" not in codes(reviews[0].flags)
+
+
+class TestPolicyRules:
+    """The SIPO's own promises, tested against what the period row discloses.
+
+    These exist so "the manager committed to X" is raised by the engine rather than
+    remembered by a human reading 30 reports.
+    """
+
+    HEDGING = {"hedging_minimum_percent": 50}
+
+    def test_hedged_share_below_the_minimum_fires(self):
+        current = {"live_swap_notional": 20_000_000, "total_debt": 66_000_000}
+        flags = evaluate(current, None, self.HEDGING, AS_AT)
+        assert "hedging_below_policy" in codes(flags)
+        flag = by_code(flags, "hedging_below_policy")
+        assert flag.severity is Severity.HIGH
+        assert "30% of debt hedged" in flag.message
+
+    def test_hedged_share_above_the_minimum_is_silent(self):
+        current = {"live_swap_notional": 40_000_000, "total_debt": 66_000_000}
+        flags = evaluate(current, None, self.HEDGING, AS_AT)
+        assert "hedging_below_policy" not in codes(flags)
+        assert "hedging_policy_unverifiable" not in codes(flags)
+
+    def test_every_swap_expired_is_a_real_zero_and_fires(self):
+        """live_swap_notional 0.0 means the report listed swaps and all have expired."""
+        current = {"live_swap_notional": 0.0, "total_debt": 66_000_000}
+        flag = by_code(evaluate(current, None, self.HEDGING, AS_AT), "hedging_below_policy")
+        assert "0% of debt hedged" in flag.message
+
+    def test_notional_above_debt_is_unverifiable_not_compliance(self):
+        """Augusta's real numbers: $66.9m of live notional against $53.5m of debt."""
+        current = {"live_swap_notional": 66_875_000, "total_debt": 53_500_000}
+        flags = evaluate(current, None, self.HEDGING, AS_AT)
+        assert "hedging_below_policy" not in codes(flags)
+        flag = by_code(flags, "hedging_policy_unverifiable")
+        assert "staggered or forward-starting" in flag.message
+
+    def test_undisclosed_notional_is_unverifiable_not_a_breach(self):
+        """Most reports state a hedged percentage but no dollar notional."""
+        current = {"total_debt": 66_000_000, "swap_count": 2}
+        flags = evaluate(current, None, self.HEDGING, AS_AT)
+        assert "hedging_below_policy" not in codes(flags)
+        assert by_code(flags, "hedging_policy_unverifiable").severity is Severity.MEDIUM
+
+    def test_no_swaps_mentioned_is_not_read_as_nothing_hedged(self):
+        """`swap_count` is 0 both for "no swaps" and for "never mentioned"."""
+        current = {"total_debt": 66_000_000, "swap_count": 0}
+        assert "hedging_below_policy" not in codes(evaluate(current, None, self.HEDGING, AS_AT))
+
+    def test_expired_swap_is_named_in_the_unverifiable_message(self):
+        current = {"total_debt": 66_000_000, "earliest_swap_expiry": "2026-06-05"}
+        flag = by_code(evaluate(current, None, self.HEDGING, AS_AT), "hedging_policy_unverifiable")
+        assert "expired 05 Jun 2026" in flag.message
+
+    def test_no_hedging_policy_raises_nothing(self):
+        current = {"live_swap_notional": 1_000, "total_debt": 66_000_000}
+        flags = evaluate(current, None, {"syndicate_id": "X"}, AS_AT)
+        assert not {"hedging_below_policy", "hedging_policy_unverifiable"} & codes(flags)
+
+    def test_occupancy_below_the_floor_fires(self):
+        flags = evaluate({"occupancy_percent": 86.2}, None, {"occupancy_floor_percent": 90}, AS_AT)
+        flag = by_code(flags, "occupancy_below_policy")
+        assert flag.severity is Severity.HIGH
+        assert "86.2% is below the SIPO's 90% floor" in flag.message
+
+    def test_occupancy_at_the_floor_is_silent(self):
+        flags = evaluate({"occupancy_percent": 90.0}, None, {"occupancy_floor_percent": 90}, AS_AT)
+        assert "occupancy_below_policy" not in codes(flags)
+
+    def test_undisclosed_occupancy_is_not_zero(self):
+        flags = evaluate({"occupancy_percent": ""}, None, {"occupancy_floor_percent": 90}, AS_AT)
+        assert "occupancy_below_policy" not in codes(flags)
+
+    def test_nta_below_the_floor_fires(self):
+        baseline = {"nta_floor_percent": 85, "formation_nav_per_unit": 50_000}
+        flags = evaluate({"nta_per_unit": 40_000}, None, baseline, AS_AT)
+        assert "nta_below_policy" in codes(flags)
+
+    def test_nta_above_the_floor_is_silent(self):
+        baseline = {"nta_floor_percent": 85, "formation_nav_per_unit": 50_000}
+        flags = evaluate({"nta_per_unit": 45_431}, None, baseline, AS_AT)
+        assert "nta_below_policy" not in codes(flags)
+
+    def test_nta_rule_is_dormant_without_a_formation_nav(self):
+        """original_investment_per_unit is NOT the formation NTA; substituting it
+        would manufacture breaches, so the rule stays silent instead."""
+        baseline = {"nta_floor_percent": 85, "original_investment_per_unit": 50_000}
+        flags = evaluate({"nta_per_unit": 36_624}, None, baseline, AS_AT)
+        assert "nta_below_policy" not in codes(flags)
