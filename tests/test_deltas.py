@@ -409,3 +409,22 @@ class TestPolicyRules:
         baseline = {"nta_floor_percent": 85, "original_investment_per_unit": 50_000}
         flags = evaluate({"nta_per_unit": 36_624}, None, baseline, AS_AT)
         assert "nta_below_policy" not in codes(flags)
+
+
+class TestFiguresInThousands:
+    """Centuria NZ Diversified stored a valuation of 153,980 for a $154m fund: the
+    report's table was printed in thousands and read as dollars."""
+
+    def test_a_tiny_valuation_is_flagged(self):
+        current = {"valuation": 153_980, "total_debt": 60_475}
+        flag = by_code(evaluate(current, None, None, AS_AT), "figures_may_be_in_thousands")
+        assert flag.severity is Severity.HIGH
+        assert "1,000x" in flag.message
+
+    def test_a_real_valuation_is_silent(self):
+        current = {"valuation": 137_000_000, "total_debt": 66_030_000}
+        assert "figures_may_be_in_thousands" not in codes(evaluate(current, None, None, AS_AT))
+
+    def test_an_undisclosed_valuation_is_not_flagged(self):
+        """Blank is unknown, not a tiny number."""
+        assert "figures_may_be_in_thousands" not in codes(evaluate({"valuation": ""}, None, None, AS_AT))

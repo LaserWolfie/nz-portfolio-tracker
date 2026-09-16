@@ -43,6 +43,11 @@ MATERIAL_VALUATION_DROP = 10.0    # percent relative decline
 
 PAYOUT_RATIO_UNSUSTAINABLE = 100.0
 
+#: A property syndicate's valuation below this is not a small property, it is a table
+#: printed in thousands and read as dollars. Centuria NZ Diversified stored a "valuation"
+#: of 153,980 and a "loan balance" of 60,475 against a fund of $154m and $60m.
+IMPLAUSIBLE_VALUATION = 1_000_000.0
+
 # Live swap notional above this share of debt cannot be a point-in-time hedge: the
 # swaps must be staggered or forward-starting.
 HEDGE_SHARE_IMPLAUSIBLE = 100.0
@@ -432,6 +437,26 @@ def _rule_disclosure_withdrawn(current, prior, baseline, as_at) -> list[Flag]:
                  f"Reported last period but absent this period: {readable}")]
 
 
+def _rule_figures_in_thousands(current, prior, baseline, as_at) -> list[Flag]:
+    """A valuation too small to be a building means the report's table was in thousands.
+
+    Ratios survive this unharmed -- LVR computed from two figures in thousands is still
+    correct -- so nothing else in the pipeline notices. Only the dollar figures are
+    wrong, and they are wrong by a factor of a thousand.
+    """
+    valuation = _num(current.get("valuation"))
+    if valuation is None or valuation >= IMPLAUSIBLE_VALUATION:
+        return []
+    debt = _num(current.get("total_debt"))
+    detail = f"valuation reads {valuation:,.0f}"
+    if debt is not None:
+        detail += f" against debt of {debt:,.0f}"
+    return [Flag("figures_may_be_in_thousands", Severity.HIGH, "valuation",
+                 f"{detail} -- too small for a property syndicate, so the report's table was "
+                 "probably printed in thousands and the dollar figures are 1,000x too low",
+                 valuation)]
+
+
 def _rule_extraction_quality(current, prior, baseline, as_at) -> list[Flag]:
     """Low completeness usually means a scanned PDF or the wrong document."""
     found = _num(current.get("completeness_found"))
@@ -544,6 +569,7 @@ RULES = [
     _rule_fees_vs_distributions,
     _rule_disclosure_withdrawn,
     _rule_extraction_quality,
+    _rule_figures_in_thousands,
 ]
 
 

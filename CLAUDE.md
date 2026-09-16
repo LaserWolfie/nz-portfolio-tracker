@@ -1348,6 +1348,77 @@ Where a syndicate beats *every* reference, the finding is solid -- Airpark's 17.
 beats all four. Where it beats none, that is also solid: Centuria Industrial, Penrose,
 Montreal, Jasper Industrial and Surplus Brokers are above all four on gearing.
 
+## Decision windows and refinance sensitivity ✅ built
+
+`modules/decisions.py`, **plain Python, no LLM**, same rule as `deltas` and `benchmarks`.
+`tests/test_decisions.py` covers it. **Nothing in this module recommends a course of
+action** — it reports dates and arithmetic. Investment advice stays out of this codebase:
+the tool computes, the reader decides.
+
+**Why dates matter more here than in a listed portfolio.** A syndicate unit has no
+continuous market. A decision only exists at particular moments, so `windows()` collects
+them from stored figures and orders them: fund term expiring (usually with a vote), bank
+facility maturing, hedge rolling off. Past dates are kept and marked `PASSED` — a facility
+that matured in July is a live problem, not history. `Syndicate_Baseline` gained
+**`fund_term_expiry`** (a constitutional fact, not a reporting-period one) and
+**`decision_notes`**, filled only where a document states it:
+
+| Syndicate | Term expiry | What the document says |
+|---|---|---|
+| `CENT-GOVT1` | 2026-08-11 | vote held; resolution was to extend two years. **Outcome unknown**, loan expired the same day |
+| `CENT-GOVT2` | 2026-12-02 | Notice of Meeting due November; extension "likely" |
+| `CENT-GRENFELLST` | 2027-04-01 | "reviewing the future strategy", no recommendation — hedge, loan and term all inside one month |
+| `SILV-SURPLUSBROKE` | — | investors **approved marketing the property for sale**; a sale is the exit |
+| `PMG-GENERATION` | — | merged into Pacific Property Fund; exit now depends on PPF's own liquidity |
+
+**The live register: 16 of 31 dates have already passed.** Ten swaps expired before today,
+MP Innovation's facility expired 18 Jul 2026, and Govt Income 1's facility *and* term both
+fell on 11 Aug 2026.
+
+### Refinance sensitivity
+
+`refinance_sensitivity()` applies a rate shock (default 200bp, always a parameter) to the
+**whole facility**. No credit is taken for hedging: where notionals are disclosed they
+exceed the debt, because the swaps are staggered and the schema has no start dates, so the
+hedged share at any one moment is not derivable. The dated worst case is the honest one.
+
+Distributions come from the payout ratio applied to adjusted operating profit — the pair
+the reports actually disclose together — and cover is `(profit - extra interest) /
+distributions`.
+
+**Profit is annualised from the report's own period first.** Warrawong Plaza consumed
+"429% of profit" until this existed, because a quarter's $0.51m of distributable earnings
+was meeting a year of extra interest. `period_months()` reads the report's own
+`report_type`; where the label does not say what period it covers, **cover is left unknown
+rather than assumed annual**.
+
+At +200bp, of the 13 syndicates where cover can be computed, **8 fall below 1.0**:
+
+| Syndicate | Cover now | After +200bp |
+|---|---|---|
+| `OYST-PASTORALHOUS` | 0.72 | **0.08** |
+| `CENT-INDUSTRIAL` | 1.10 | **0.67** |
+| `CENT-AGRICULTURAL` | 0.95 | **0.75** |
+| `CENT-PENROSE` | 1.09 | **0.81** |
+| `SGB` | 1.15 | **0.92** |
+| `CENT-BROADWAY33` | 1.22 | **0.96** |
+
+`income_at_risk()` joins this back to `Syndicate_Data`: of **$200,875** of annual property
+distributions, **$71,414 (35.6%)** sits behind a distribution that stops being covered, and
+**$84,036** cannot be computed at all — counted as unknown, never as safe.
+
+### The guard the sensitivity exposed
+
+Modelling dollars found a stored row that ratios had hidden. **Centuria NZ Diversified is
+stored in thousands**: `valuation` 153,980 and `total_debt` 60,475, from a report whose
+table is printed in $000s. Its LVR of 39.3% is *correct* — a ratio of two figures in
+thousands is still a ratio — so nothing else in the pipeline noticed, and only the dollar
+figures are wrong, by a factor of a thousand.
+
+`deltas._rule_figures_in_thousands` now flags any valuation below `IMPLAUSIBLE_VALUATION`
+($1m): too small to be a property syndicate, so the table was probably in thousands. It
+fires on exactly one stored row today.
+
 ## Cross-checking extractions with a second model
 
 `scripts/crosscheck_fable.py` re-extracts the stored PDFs with a different model and diffs
