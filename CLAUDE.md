@@ -1037,7 +1037,7 @@ that; the schema caught it in `cash_return_basis`. **Check the basis before trea
 gap as a shortfall** — several of these promises are dated, and the SIPOs themselves are
 from 2019–2025.
 
-## Industry_Benchmarks ✅ built (empty by design)
+## Industry_Benchmarks ✅ built
 
 `modules/industry.py` plus an `Industry_Benchmarks` tab. Both external sources — listed NZ
 vehicles and valuer sector series — land in one tab keyed by
@@ -1052,10 +1052,10 @@ vehicles and valuer sector series — land in one tab keyed by
 | `basis_notes` | **how it is measured** — the comparability test |
 | `url`, `entered_at` | audit trail |
 
-**The tab is deliberately empty.** Seeding it with unverified numbers would be worse than
-leaving it blank: a benchmark gets used in an argument with a manager, and that is exactly
-when an unsourced figure becomes worthless. Rows must be entered from a source that can be
-cited.
+**Every row must come from a citable source.** The tab started deliberately empty, and that
+rule still governs what goes in it: a benchmark gets used in an argument with a manager, and
+that is exactly when an unsourced figure becomes worthless. It now holds **29 usable rows**
+from four listed vehicles (see *Goodman and Precinct added* below).
 
 Two of the three rules are refusals, and `parse_benchmarks()` drops any row that breaks
 them rather than using it:
@@ -1072,24 +1072,30 @@ from a thin reference set.
 
 ### What to collect, and for which sectors
 
-The FY2026 cohort is Office 4, Industrial 3, Diversified 1, Commercial Property 1,
-Agriculture 1. Metrics measurable across the cohort, so worth finding a benchmark for:
+The cohort is now **27 syndicates**: Office 10, Industrial 9, Agriculture 2, Diversified 2,
+and one each of Car Parking, Childcare, Healthcare and Retail. Only Office and Industrial
+clear `MIN_SECTOR_COHORT`, so only those two get sector-relative ranks. Measurable across the
+cohort, so worth finding a benchmark for:
 
 | Metric | Measurable | Best external source |
 |---|---|---|
-| `lvr_percent`, `payout_ratio_percent`, `wale_years`, `cash` | 10 of 10 | listed vehicles |
-| `capitalisation_rate_percent` | 9 | valuer sector series (CBRE/Colliers/JLL) |
-| `manager_fee_total_percent` | 8 | listed vehicles' management expense ratios |
-| `capex_spent` | 7 | listed vehicles |
-| `rent_reversion_percent` | 6 | valuer market rent series |
-| `vacancy_percent` | 5 | valuer sector vacancy |
-| `icr_actual`, `occupancy_percent` | 4, 3 | thin — the disclosure gap bites here |
+| `lvr_percent` | 26 of 27 | listed vehicles |
+| `wale_years` | 24 | listed vehicles |
+| `cash` | 21 | listed vehicles |
+| `capitalisation_rate_percent` | 16 | valuer sector series (CBRE/Colliers/JLL) |
+| `payout_ratio_percent` | 14 | listed vehicles |
+| `occupancy_percent`, `icr_actual`, `capex_spent` | 12 each | listed vehicles |
+| `manager_fee_total_percent` | 11 | listed vehicles' management expense ratios |
+| `rent_reversion_percent` | 8 | valuer market rent series |
+| `vacancy_percent` | 8 | valuer sector vacancy |
+| `lease_incentives_paid` | 6 | listed vehicles |
 
 Listed comparators: Precinct, Argosy, Goodman, Kiwi Property, Property for Industry. All
 publish semi-annually, and **all file on the NZX** rather than the Disclose Register.
 
-Note `icr_actual` is measurable for only 4 of 10 and `occupancy_percent` for 3. Benchmarks
-cannot fix a disclosure gap — those stay questions for the managers.
+Benchmarks cannot fix a disclosure gap. Lease incentives are missing from 21 of 27 reports,
+vacancy and rent reversion from 19, fees from 16, interest cover and occupancy from 15 —
+those stay questions for the managers, not gaps an external series can fill.
 
 ### Listed vehicles collected: Argosy and PFI
 
@@ -1138,6 +1144,48 @@ Coverage is now 10/10 for LVR, payout and WALE, 9/9 for cap rate, 6/6 for rent r
 and 3/3 for occupancy. Still nothing for fees, capex, cash, vacancy or interest cover —
 Precinct, Goodman and Kiwi Property would add the office and retail comparators, and a
 valuer series would add sector cap rates and vacancy.
+
+### Goodman and Precinct added, sector labels fixed
+
+18 rows added on 2026-09-14, taking the tab to 29. Goodman and Precinct were read from their
+own annual reports and presentations, fetched by URL and parsed locally.
+
+| Source | Balance date | Sector | What it gives |
+|---|---|---|---|
+| **Goodman NZ** annual report | **31 Mar 2026** — same as most syndicates | Industrial | occupancy 96.9%, WALT 4.9y, cap rate 5.9%, LVR 19.8%, payout 85.5%, under-rented 19.5% |
+| **Precinct** interim presentation | 31 Dec 2025 | Office | occupancy 97% by NLA, WALT 6.1y, cap rate 5.8%, gearing 37.2%, under-rented 6% |
+| **Precinct** annual report | 30 Jun 2026 | Office | occupancy 97%, WALT 7.1y, cap rate 5.9%, gearing 36.3%, payout 104.8% to AFFO, under-rented 3%, **ICR 2.1x** |
+
+Precinct's ICR is the first interest-cover benchmark in the tab. Two figures were deliberately
+left out: its half-year payout ratio (106% over six months against 90–92% full-year guidance)
+and its 49bp management expense ratio, which covers running the listed company and is not
+comparable with a syndicate's fee on scheme property.
+
+**Goodman is an outlier on gearing, and the no-hindsight rule hands it the March industrial
+rows.** Its 19.8% is look-through and follows nearly $700m of asset sales — a year earlier it
+was 31.8%. Because it is sector-specific and not dated after the March periods, `applicable()`
+prefers it over PFI's 34.2%, which makes every industrial syndicate look 20–29 points worse
+than a fairer comparator would. Adding **Argosy's and PFI's half-year figures at 31 Dec 2025**
+is the fix, and would also give the March office rows an ICR benchmark.
+
+**Three sector labels were wrong, and sector ranks depend on them:**
+
+| Syndicate | Was | Now | Evidence |
+|---|---|---|---|
+| `CENT-BROADWAY33` | Commercial Property | **Office** | Mercury's head office; office and retail over five levels |
+| `CENT-WILLIAMSSTRE` | Commercial Property | **Industrial** | FY26 report p21: "a large cold store facility with office" |
+| `MYFA-OHANGA` | Commercial | **Agriculture** | accounts list poultry sheds, broiler units, pastoral land |
+
+Fixed in `Syndicate_Baseline` **and** the matching `Syndicate_Data.Sector` cells, so the
+dashboards and the cohort agree. `MACK-MPINNOVATION` stays **Car Parking** — its report
+describes 14 car-park decks plus five ground-floor retail units.
+
+What the re-run changed: office syndicates are now measured against Precinct rather than
+Argosy's all-sector figures, which is a sharper test — 33 Broadway is **+31% over market rent
+against Precinct's −6%**, and Augusta, Building A and Building B all trail Precinct's 6.1-year
+WALT by more than two years. Cap rates above Precinct's read as conservative, but part of that
+gap is simply secondary stock against premium CBD towers. Still zero benchmarks for capex,
+cash, fees, vacancy and lease incentives.
 
 ## Cross-checking extractions with a second model
 
